@@ -1,7 +1,9 @@
-__pycache__
+i_pycache__
 *.pyc
 *_disp.jpg
 *_disp.npy
 *.npz
 kitti_data
 models
+.vscode
+checkpoints*/
