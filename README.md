@@ -34,10 +34,17 @@ year = {2019}
 ## ⚙️ Setup
 
 Assuming a fresh [Anaconda](https://www.anaconda.com/download/) distribution, you can install the dependencies with:
+Official version:
 ```shell
 conda install pytorch=0.4.1 torchvision=0.2.1 -c pytorch
 pip install tensorboardX==1.4
 conda install opencv=3.3.1   # just needed for evaluation
+```
+__My version__:
+```shell
+conda install pytorch torchvision cudatoolkit=10.1 -c pytorch
+pip install scikit-image pillow-simd
+conda install -c anaconda ipython
 ```
 We ran our experiments with PyTorch 0.4.1, CUDA 9.1, Python 3.6.6 and Ubuntu 18.04.
 We have also successfully trained models with PyTorch 1.0, and our code is compatible with Python 2.7. You may have issues installing OpenCV version 3.3.1 if you use Python 3.7, we recommend to create a virtual environment with Python 3.6.6 `conda create -n monodepth2 python=3.6.6 anaconda `.

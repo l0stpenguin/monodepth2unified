@@ -1,0 +1,12 @@
+CUDA_VISIBLE_DEVICES=3 python train.py \
+--data_path /home/share/datasets/nyu_v2/nyu_v2_raw \
+--log_dir checkpoints_nyu \
+--model_name nyu_512_resnet50 \
+--split nyu_toy \
+--num_layers 50 \
+--dataset nyu \
+--height 384 \
+--width 512 \
+--scales 0 \
+--frame_ids 0 -5 5 \
+--log_frequency 50
