@@ -216,10 +216,10 @@ class Trainer:
 
             # log less frequently after the first 2000 steps to save time & disk space
             early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 2000
-            late_phase = self.step % 2000 == 0
+            late_phase = self.step % 500 == 0 and self.step >= 2000
 
             if early_phase or late_phase:
-                self.log_time(batch_idx, duration, losses["loss"].cpu().data)
+                self.log_time(batch_idx, duration, losses)# ["loss"].cpu().data)
 
                 if "depth_gt" in inputs:
                     self.compute_depth_losses(inputs, outputs, losses)
@@ -257,7 +257,7 @@ class Trainer:
                 outputs.update(self.models["depth"](features[f_i], frame_id=f_i))
 
         if self.opt.predictive_mask:
-            outputs["predictive_mask"] = self.models["predictive_mask"](features)
+            outputs["predictive_mask"] = self.models["predictive_mask"](features[0], 0)
 
         if self.use_pose_net:
             outputs.update(self.predict_poses(inputs, features))
@@ -422,17 +422,22 @@ class Trainer:
 
         return reprojection_loss
 
-    def compute_geometry_loss(self, computed_depth, projected_depth):
-        # return (computed_depth - projected_depth).abs() / (computed_depth + projected_depth).abs()
-        inv_computed_depth = 1 / computed_depth
-        inv_projected_depth = 1 / projected_depth
-        return (inv_computed_depth - inv_projected_depth).abs()
+    def compute_geometry_loss(self, computed_depth, projected_depth, use_depth=False):
+        if use_depth:
+            return (computed_depth - projected_depth).abs() / (computed_depth + projected_depth).abs()
+        else:
+            inv_computed_depth = 1 / computed_depth
+            inv_projected_depth = 1 / projected_depth
+            return (inv_computed_depth - inv_projected_depth).abs()
 
     def compute_losses(self, inputs, outputs):
         """Compute the reprojection and smoothness losses for a minibatch
         """
         losses = {}
         total_loss = 0
+        total_reprojection_loss = 0
+        total_geometry_loss = 0
+        total_smooth_loss = 0
 
         for scale in self.opt.scales:
             loss = 0
@@ -454,7 +459,7 @@ class Trainer:
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
                 computed_depth = outputs[("computed_depth", frame_id, scale)]
                 projected_depth = outputs[("projected_depth", frame_id, scale)]
-                geometry_losses.append(self.compute_geometry_loss(computed_depth, projected_depth))
+                geometry_losses.append(self.compute_geometry_loss(computed_depth, projected_depth, self.opt.geometry_consistency_via_depth))
 
             reprojection_losses = torch.cat(reprojection_losses, 1)
             geometry_losses = torch.cat(geometry_losses, 1)
@@ -476,7 +481,7 @@ class Trainer:
 
             elif self.opt.predictive_mask:
                 # use the predicted mask
-                mask = outputs["predictive_mask"]["disp", scale]
+                mask = outputs["predictive_mask"]["disp", 0, scale]
                 if not self.opt.v1_multiscale:
                     mask = F.interpolate(
                         mask, [self.opt.height, self.opt.width],
@@ -531,10 +536,19 @@ class Trainer:
             loss += self.opt.geometry_consistency * geometry_loss_to_optimise / (2 ** scale)
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
             total_loss += loss
+            total_reprojection_loss += reprojection_loss_to_optimise / (2 ** scale)
+            total_geometry_loss += geometry_loss_to_optimise / (2 ** scale)
+            total_smooth_loss += smooth_loss / (2 ** scale)
             losses["loss/{}".format(scale)] = loss
 
         total_loss /= self.num_scales
+        total_reprojection_loss /= self.num_scales
+        total_geometry_loss /= self.num_scales
+        total_smooth_loss /= self.num_scales
         losses["loss"] = total_loss
+        losses["reprojection_loss"] = total_reprojection_loss
+        losses["geometry_loss"] = total_geometry_loss
+        losses["smooth_loss"] = total_smooth_loss
         return losses
 
     def compute_depth_losses(self, inputs, outputs, losses):
@@ -567,16 +581,20 @@ class Trainer:
         for i, metric in enumerate(self.depth_metric_names):
             losses[metric] = np.array(depth_errors[i].cpu())
 
-    def log_time(self, batch_idx, duration, loss):
+    def log_time(self, batch_idx, duration, losses):
         """Print a logging statement to the terminal
         """
         samples_per_sec = self.opt.batch_size / duration
         time_sofar = time.time() - self.start_time
         training_time_left = (
             self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
-        print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
-            " | loss: {:.5f} | time elapsed: {} | time left: {}"
-        print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
+
+        loss = losses["loss"].cpu().data
+        reprojection_loss = losses["reprojection_loss"].cpu().data
+        geometry_loss = losses["geometry_loss"].cpu().data
+        smooth_loss = losses["smooth_loss"].cpu().data
+        print_string = "epoch {:>3} | batch {:>6} | loss: {:.5f}, photo: {:.4f}, geo: {:.4f}, smooth: {:.4f} | time elapsed: {} | time left: {}"
+        print(print_string.format(self.epoch, batch_idx, loss, reprojection_loss, geometry_loss, smooth_loss,
                                   sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
 
     def log(self, mode, inputs, outputs, losses):
@@ -606,7 +624,7 @@ class Trainer:
                     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
                         writer.add_image(
                             "predictive_mask_{}_{}/{}".format(frame_id, s, j),
-                            outputs["predictive_mask"][("disp", s)][j, f_idx][None, ...],
+                            outputs["predictive_mask"][("disp", 0, s)][j, f_idx][None, ...],
                             self.step)
 
                 elif not self.opt.disable_automasking:

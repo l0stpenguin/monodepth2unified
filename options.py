@@ -86,6 +86,8 @@ class MonodepthOptions:
                                  type=float,
                                  help="geometry consistency weight",
                                  default=0)
+        self.parser.add_argument("--geometry_consistency_via_depth",
+                                 action='store_true')
 
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",

@@ -1,10 +1,13 @@
-CUDA_VISIBLE_DEVICES=4 python train.py \
+CUDA_VISIBLE_DEVICES=6 python train.py \
+--dataset kitti \
 --data_path /home/share/datasets/kitti/raw_data_sync \
---model_name kitti_192_640 \
---log_dir checkpoints \
+--log_dir checkpoints_kitti \
 --split eigen_zhou \
+--min_depth 1e-3 --max_depth 100 \
+--height 256 --width 832 \
+--frame_ids 0 -1 1 \
+--log_frequency 100 \
 --png \
 --scales 0 \
---min_depth 1e-3 \
---max_depth 80 \
---log_frequency 50
+--geometry_consistency 0.1 \
+--model_name kitti-g0.1
