@@ -190,7 +190,7 @@ class Project3D(nn.Module):
         pix_coords[..., 0] /= self.width - 1
         pix_coords[..., 1] /= self.height - 1
         pix_coords = (pix_coords - 0.5) * 2
-        return pix_coords
+        return pix_coords, cam_points[:, 2, :].view(self.batch_size, 1, self.height, self.width)
 
 
 def upsample(x):

@@ -237,6 +237,7 @@ class Trainer:
         for key, ipt in inputs.items():
             inputs[key] = ipt.to(self.device)
 
+        outputs = {}
         if self.opt.pose_model_type == "shared":
             # If we are using a shared encoder for both depth and pose (as advocated
             # in monodepthv1), then all images are fed separately through the depth encoder.
@@ -247,12 +248,13 @@ class Trainer:
             features = {}
             for i, k in enumerate(self.opt.frame_ids):
                 features[k] = [f[i] for f in all_features]
-
-            outputs = self.models["depth"](features[0])
+                outputs.update(self.models["depth"](features[k], frame_id=k))
         else:
+            features = {}
             # Otherwise, we only feed the image with frame_id 0 through the depth encoder
-            features = self.models["encoder"](inputs["color_aug", 0, 0])
-            outputs = self.models["depth"](features)
+            for f_i in self.opt.frame_ids:
+                features[f_i] = self.models["encoder"](inputs["color_aug", f_i, 0])
+                outputs.update(self.models["depth"](features[f_i], frame_id=f_i))
 
         if self.opt.predictive_mask:
             outputs["predictive_mask"] = self.models["predictive_mask"](features)
@@ -349,19 +351,23 @@ class Trainer:
         Generated images are saved into the `outputs` dictionary.
         """
         for scale in self.opt.scales:
-            disp = outputs[("disp", scale)]
-            if self.opt.v1_multiscale:
-                source_scale = scale
-            else:
-                disp = F.interpolate(
-                    disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-                source_scale = 0
 
-            _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
+            for i, frame_id in enumerate(self.opt.frame_ids):
 
-            outputs[("depth", 0, scale)] = depth
+                disp = outputs[("disp", frame_id, scale)]
+                if self.opt.v1_multiscale:
+                    source_scale = scale
+                else:
+                    disp = F.interpolate(
+                        disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+                    source_scale = 0
 
-            for i, frame_id in enumerate(self.opt.frame_ids[1:]):
+                _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
+
+                outputs[("depth", frame_id, scale)] = depth
+
+                if i == 0:
+                    continue
 
                 if frame_id == "s":
                     T = inputs["stereo_T"]
@@ -374,7 +380,7 @@ class Trainer:
                     axisangle = outputs[("axisangle", 0, frame_id)]
                     translation = outputs[("translation", 0, frame_id)]
 
-                    inv_depth = 1 / depth
+                    inv_depth = 1 / outputs[("depth", 0, scale)]
                     mean_inv_depth = inv_depth.mean(3, True).mean(2, True)
 
                     T = transformation_from_parameters(
@@ -382,14 +388,19 @@ class Trainer:
                         invert=((frame_id < 0) and (not self.opt.allow_backward)))
 
                 cam_points = self.backproject_depth[source_scale](
-                    depth, inputs[("inv_K", source_scale)])
-                pix_coords = self.project_3d[source_scale](
+                    outputs[("depth", 0, scale)], inputs[("inv_K", source_scale)])
+                pix_coords, computed_depth = self.project_3d[source_scale](
                     cam_points, inputs[("K", source_scale)], T)
 
                 outputs[("sample", frame_id, scale)] = pix_coords
+                outputs[("computed_depth", frame_id, scale)] = computed_depth
 
                 outputs[("color", frame_id, scale)] = F.grid_sample(
                     inputs[("color", frame_id, source_scale)],
+                    outputs[("sample", frame_id, scale)],
+                    padding_mode="border", align_corners=True)
+                outputs[("projected_depth", frame_id, scale)] = F.grid_sample(
+                    outputs[("depth", frame_id, source_scale)],
                     outputs[("sample", frame_id, scale)],
                     padding_mode="border", align_corners=True)
 
@@ -411,6 +422,12 @@ class Trainer:
 
         return reprojection_loss
 
+    def compute_geometry_loss(self, computed_depth, projected_depth):
+        # return (computed_depth - projected_depth).abs() / (computed_depth + projected_depth).abs()
+        inv_computed_depth = 1 / computed_depth
+        inv_projected_depth = 1 / projected_depth
+        return (inv_computed_depth - inv_projected_depth).abs()
+
     def compute_losses(self, inputs, outputs):
         """Compute the reprojection and smoothness losses for a minibatch
         """
@@ -420,21 +437,27 @@ class Trainer:
         for scale in self.opt.scales:
             loss = 0
             reprojection_losses = []
+            geometry_losses = []
 
             if self.opt.v1_multiscale:
                 source_scale = scale
             else:
                 source_scale = 0
 
-            disp = outputs[("disp", scale)]
-            color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
-
+            ##############################################################################
+            # 1. compute reprojection loss with(-out) per-pixel minimum, auto-masking
+            # 2. compute reprojection loss with(-out) per-pixel minimum
+            ##############################################################################
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
+                computed_depth = outputs[("computed_depth", frame_id, scale)]
+                projected_depth = outputs[("projected_depth", frame_id, scale)]
+                geometry_losses.append(self.compute_geometry_loss(computed_depth, projected_depth))
 
             reprojection_losses = torch.cat(reprojection_losses, 1)
+            geometry_losses = torch.cat(geometry_losses, 1)
 
             if not self.opt.disable_automasking:
                 identity_reprojection_losses = []
@@ -467,8 +490,10 @@ class Trainer:
 
             if self.opt.avg_reprojection:
                 reprojection_loss = reprojection_losses.mean(1, keepdim=True)
+                geometry_loss = geometry_losses.mean(1, keepdim=True)
             else:
                 reprojection_loss = reprojection_losses
+                geometry_loss, _ = torch.min(geometry_losses, dim=1, keepdim=True)
 
             if not self.opt.disable_automasking:
                 # add random numbers to break ties
@@ -488,12 +513,22 @@ class Trainer:
                 outputs["identity_selection/{}".format(scale)] = (
                     idxs > identity_reprojection_loss.shape[1] - 1).float()
 
-            loss += to_optimise.mean()
+            reprojection_loss_to_optimise = to_optimise.mean()
+            geometry_loss_to_optimise = geometry_loss.mean()
 
-            mean_disp = disp.mean(2, True).mean(3, True)
-            norm_disp = disp / (mean_disp + 1e-7)
-            smooth_loss = get_smooth_loss(norm_disp, color)
+            ##############################################################################
+            # 3. compute disparity smoothness loss
+            ##############################################################################
+            smooth_loss = 0
+            for frame_id in self.opt.frame_ids:
+                disp = outputs[("disp", frame_id, scale)]
+                color = inputs[("color", frame_id, scale)]
+                mean_disp = disp.mean(2, True).mean(3, True)
+                norm_disp = disp / (mean_disp + 1e-7)
+                smooth_loss += get_smooth_loss(norm_disp, color)
 
+            loss += reprojection_loss_to_optimise / (2 ** scale)
+            loss += self.opt.geometry_consistency * geometry_loss_to_optimise / (2 ** scale)
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
             total_loss += loss
             losses["loss/{}".format(scale)] = loss
@@ -561,11 +596,10 @@ class Trainer:
                         writer.add_image(
                             "color_pred_{}_{}/{}".format(frame_id, s, j),
                             outputs[("color", frame_id, s)][j].data, self.step)
-
-                writer.add_image(
-                    "disp_{}/{}".format(s, j),
-                    tensor2array(outputs[("disp", s)][j], max_value=None, colormap='magma'),
-                    self.step)
+                    writer.add_image(
+                        "disp_{}_{}/{}".format(frame_id, s, j),
+                        tensor2array(outputs[("disp", frame_id, s)][j], max_value=None, colormap='magma'),
+                        self.step)
                     # outputs[("disp", s)][j], self.step)
 
                 if self.opt.predictive_mask:

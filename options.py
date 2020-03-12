@@ -82,6 +82,10 @@ class MonodepthOptions:
                                  type=int,
                                  help="frames to load",
                                  default=[0, -1, 1])
+        self.parser.add_argument("--geometry_consistency",
+                                 type=float,
+                                 help="geometry consistency weight",
+                                 default=0)
 
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
