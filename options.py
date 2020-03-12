@@ -202,6 +202,9 @@ class MonodepthOptions:
                                  help="if set will perform the flipping post processing "
                                       "from the original monodepth paper",
                                  action="store_true")
+        self.parser.add_argument("--allow_backward",
+                                 help="check how the forward passing effects the training",
+                                 action="store_true")
 
     def parse(self):
         self.options = self.parser.parse_args()

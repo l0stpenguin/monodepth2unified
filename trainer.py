@@ -63,7 +63,7 @@ class Trainer:
             self.models["encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
-        
+
         print("  PoseNet: ", self.opt.pose_model_type)
         if self.use_pose_net:
             if self.opt.pose_model_type == "separate_resnet":
@@ -78,7 +78,7 @@ class Trainer:
                 self.models["pose"] = networks.PoseDecoder(
                     self.models["pose_encoder"].num_ch_enc,
                     num_input_features=1,
-                    num_frames_to_predict_for=2)
+                    num_frames_to_predict_for=1)
 
             elif self.opt.pose_model_type == "shared":
                 self.models["pose"] = networks.PoseDecoder(
@@ -282,7 +282,7 @@ class Trainer:
             for f_i in self.opt.frame_ids[1:]:
                 if f_i != "s":
                     # To maintain ordering we always pass frames in temporal order
-                    if f_i < 0:
+                    if (f_i < 0) and (not self.opt.allow_backward):
                         pose_inputs = [pose_feats[f_i], pose_feats[0]]
                     else:
                         pose_inputs = [pose_feats[0], pose_feats[f_i]]
@@ -298,7 +298,7 @@ class Trainer:
 
                     # Invert the matrix if the frame id is negative
                     outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
-                        axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
+                        axisangle[:, 0], translation[:, 0], invert=((f_i < 0) and (not self.opt.allow_backward)))
 
         else:
             # Here we input all frames to the pose net (and predict all poses) together
@@ -378,7 +378,8 @@ class Trainer:
                     mean_inv_depth = inv_depth.mean(3, True).mean(2, True)
 
                     T = transformation_from_parameters(
-                        axisangle[:, 0], translation[:, 0] * mean_inv_depth[:, 0], frame_id < 0)
+                        axisangle[:, 0], translation[:, 0] * mean_inv_depth[:, 0],
+                        invert=((frame_id < 0) and (not self.opt.allow_backward)))
 
                 cam_points = self.backproject_depth[source_scale](
                     depth, inputs[("inv_K", source_scale)])
