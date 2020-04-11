@@ -61,11 +61,14 @@ class MonodepthOptions:
                                  type=float,
                                  help="disparity smoothness weight",
                                  default=1e-3)
-        self.parser.add_argument("--scales",
-                                 nargs="+",
+        self.parser.add_argument("--geometry_consistency",
+                                 type=float,
+                                 help="geometry consistency weight",
+                                 default=0)
+        self.parser.add_argument("--num_scales",
                                  type=int,
-                                 help="scales used in the loss",
-                                 default=[0, 1, 2, 3])
+                                 help="#scales used in the loss",
+                                 default=4)
         self.parser.add_argument("--min_depth",
                                  type=float,
                                  help="minimum depth",
@@ -82,12 +85,17 @@ class MonodepthOptions:
                                  type=int,
                                  help="frames to load",
                                  default=[0, -1, 1])
+        self.parser.add_argument("--rotation_mode",
+                                 type=str,
+                                 help="rotation mode",
+                                 choices=["axis", "euler", "quat"],
+                                 default="axis")
 
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=12)
+                                 default=4)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",

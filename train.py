@@ -8,10 +8,11 @@ from __future__ import absolute_import, division, print_function
 
 from trainer import Trainer
 from options import MonodepthOptions
+import setproctitle
 
 options = MonodepthOptions()
 opts = options.parse()
-
+setproctitle.setproctitle(opts.model_name)
 
 if __name__ == "__main__":
     trainer = Trainer(opts)

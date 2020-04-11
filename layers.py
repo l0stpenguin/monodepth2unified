@@ -25,10 +25,15 @@ def disp_to_depth(disp, min_depth, max_depth):
     return scaled_disp, depth
 
 
-def transformation_from_parameters(axisangle, translation, invert=False):
+def transformation_from_parameters(rotation, translation, rotation_mode='axisangle', invert=False):
     """Convert the network's (axisangle, translation) output into a 4x4 matrix
     """
-    R = rot_from_axisangle(axisangle)
+    if rotation_mode == 'axis':
+        R = rot_from_axisangle(rotation)
+    elif rotation_mode == 'euler':
+        R = rot_from_eulerangle(rotation)
+    elif rotation_mode == 'quat':
+        R = rot_from_quaternion(rotation)
     t = translation.clone()
 
     if invert:
@@ -98,6 +103,73 @@ def rot_from_axisangle(vec):
     rot[:, 2, 0] = torch.squeeze(zxC - ys)
     rot[:, 2, 1] = torch.squeeze(yzC + xs)
     rot[:, 2, 2] = torch.squeeze(z * zC + ca)
+    rot[:, 3, 3] = 1
+
+    return rot
+
+def rot_from_eulerangle(angle):
+    """Convert euler angles to 4x4 transformation matrix.
+     Reference: https://github.com/pulkitag/pycaffe-utils/blob/master/rot_utils.py#L174
+    Args:
+        angle: rotation angle along 3 axis (in radians) -- size = [B, 1, 3]
+    Returns:
+        Rotation matrix corresponding to the euler angles -- size = [B, 4, 4]
+    """
+    B = angle.size(0)
+    x, y, z = angle[:,0,0], angle[:,0,1], angle[:,0,2]
+
+    cosz = torch.cos(z)
+    sinz = torch.sin(z)
+
+    zeros = z.detach()*0
+    ones = zeros.detach()+1
+    zmat = torch.stack([cosz, -sinz, zeros,
+                        sinz,  cosz, zeros,
+                        zeros, zeros,  ones], dim=1).reshape(B, 3, 3)
+
+    cosy = torch.cos(y)
+    siny = torch.sin(y)
+
+    ymat = torch.stack([cosy, zeros,  siny,
+                        zeros,  ones, zeros,
+                        -siny, zeros,  cosy], dim=1).reshape(B, 3, 3)
+
+    cosx = torch.cos(x)
+    sinx = torch.sin(x)
+
+    xmat = torch.stack([ones, zeros, zeros,
+                        zeros,  cosx, -sinx,
+                        zeros,  sinx,  cosx], dim=1).reshape(B, 3, 3)
+
+    rot = torch.zeros((B, 4, 4)).to(device=angle.device)
+    # rot = xmat @ ymat @ zmat
+    rot[:, :3, :3] = (xmat @ ymat @ zmat).clone()
+    rot[:, 3, 3] = 1
+
+    return rot
+
+
+def rot_from_quaternion(quat):
+    """Convert quaternion coefficients to 4x4 transformation matrix.
+    Args:
+        quat: first three coeff of quaternion of rotation. fourht is then computed to have a norm of 1 -- size = [B, 1, 3]
+    Returns:
+        Rotation matrix corresponding to the quaternion -- size = [B, 4, 4]
+    """
+    norm_quat = torch.cat([quat[...,:1].detach()*0 + 1, quat], dim=1)
+    norm_quat = norm_quat/norm_quat.norm(p=2, dim=-1, keepdim=True)
+    w, x, y, z = norm_quat[:,0,0], norm_quat[:,0,1], norm_quat[:,0,2], norm_quat[:,0,3]
+
+    B = quat.size(0)
+
+    w2, x2, y2, z2 = w.pow(2), x.pow(2), y.pow(2), z.pow(2)
+    wx, wy, wz = w*x, w*y, w*z
+    xy, xz, yz = x*y, x*z, y*z
+
+    rot = torch.zeros((B, 4, 4)).to(device=quat.device)
+    rot[:, :3, :3] = torch.stack([w2 + x2 - y2 - z2, 2*xy - 2*wz, 2*wy + 2*xz,
+                                  2*wz + 2*xy, w2 - x2 + y2 - z2, 2*yz - 2*wx,
+                                  2*xz - 2*wy, 2*wx + 2*yz, w2 - x2 - y2 + z2], dim=1).reshape(B, 3, 3).clone()
     rot[:, 3, 3] = 1
 
     return rot
@@ -190,7 +262,7 @@ class Project3D(nn.Module):
         pix_coords[..., 0] /= self.width - 1
         pix_coords[..., 1] /= self.height - 1
         pix_coords = (pix_coords - 0.5) * 2
-        return pix_coords
+        return pix_coords, cam_points[:, 2, :].view(self.batch_size, 1, self.height, self.width)
 
 
 def upsample(x):

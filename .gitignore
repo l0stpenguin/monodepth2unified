@@ -1,4 +1,6 @@
 __pycache__
+.vscode
+ckpt
 *.pyc
 *_disp.jpg
 *_disp.npy
