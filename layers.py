@@ -142,7 +142,6 @@ def rot_from_eulerangle(angle):
                         zeros,  sinx,  cosx], dim=1).reshape(B, 3, 3)
 
     rot = torch.zeros((B, 4, 4)).to(device=angle.device)
-    # rot = xmat @ ymat @ zmat
     rot[:, :3, :3] = (xmat @ ymat @ zmat).clone()
     rot[:, 3, 3] = 1
 

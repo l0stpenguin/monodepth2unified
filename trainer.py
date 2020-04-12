@@ -310,17 +310,22 @@ class Trainer:
                 pix_coords, computed_depth = self.project_3d[source_scale](
                     cam_points, inputs[("K", source_scale)], T)
 
-                outputs[("sample", frame_id, scale)] = pix_coords
+                outputs[("sample_coords", frame_id, scale)] = pix_coords
                 outputs[("computed_depth", frame_id, scale)] = computed_depth
 
                 outputs[("color", frame_id, scale)] = F.grid_sample(
                     inputs[("color", frame_id, source_scale)],
-                    outputs[("sample", frame_id, scale)],
+                    outputs[("sample_coords", frame_id, scale)],
                     padding_mode="border", align_corners=True)
                 outputs[("projected_depth", frame_id, scale)] = F.grid_sample(
                     outputs[("depth", frame_id, source_scale)],
-                    outputs[("sample", frame_id, scale)],
+                    outputs[("sample_coords", frame_id, scale)],
                     padding_mode="border", align_corners=True)
+
+                outputs[("valid_mask", frame_id, scale)] = (pix_coords.abs().max(dim=-1)[0] <= 1).float()
+                if self.opt.occlusion_mask:
+                    outputs[("valid_mask", frame_id, scale)] = outputs[("valid_mask", frame_id, scale)] * (
+                        outputs[("computed_depth", frame_id, scale)] < outputs[("projected_depth", frame_id, scale)]).float()
 
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
@@ -365,12 +370,13 @@ class Trainer:
             target = inputs[("color", 0, source_scale)]
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
-                reprojection_losses.append(self.compute_reprojection_loss(pred, target))
+                reprojection_losses.append(
+                    self.compute_reprojection_loss(pred, target) * outputs[("valid_mask", frame_id, scale)].unsqueeze(1))
 
                 computed_depth = outputs[("computed_depth", frame_id, scale)]
                 projected_depth = outputs[("projected_depth", frame_id, scale)]
-                geometry_losses.append(self.compute_geometry_loss(
-                    computed_depth, projected_depth))
+                geometry_losses.append(
+                    self.compute_geometry_loss(computed_depth, projected_depth) * outputs[("valid_mask", frame_id, scale)].unsqueeze(1))
 
             reprojection_losses = torch.cat(reprojection_losses, 1)
             geometry_losses = torch.cat(geometry_losses, 1)
@@ -380,7 +386,7 @@ class Trainer:
                 for frame_id in self.opt.frame_ids[1:]:
                     pred = inputs[("color", frame_id, source_scale)]
                     identity_reprojection_losses.append(
-                        self.compute_reprojection_loss(pred, target))
+                        self.compute_reprojection_loss(pred, target) * outputs[("valid_mask", frame_id, scale)].unsqueeze(1))
 
                 identity_reprojection_losses = torch.cat(identity_reprojection_losses, 1)
 
@@ -416,7 +422,6 @@ class Trainer:
                     idxs > identity_reprojection_loss.shape[1] - 1).float()
                 geometry_loss = geometry_loss * outputs[("auto_mask", scale)].unsqueeze(1)
 
-            # loss += to_optimise.mean()
             reprojection_loss_to_optimize = to_optimise.mean()
             geometry_loss_to_optimize = geometry_loss.mean()
 
@@ -514,6 +519,10 @@ class Trainer:
                     writer.add_image(
                         "depth/f{}_s{}_b{}".format(frame_id, s, j),
                         tensor2array(outputs[("depth", frame_id, s)][j], max_value=None),
+                        self.step)
+                    writer.add_image(
+                        "valid_mask/f{}_s{}_b{}".format(frame_id, s, j),
+                        tensor2array(outputs[("valid_mask", frame_id, s)][j], max_value=1, colormap='bone'),
                         self.step)
 
                 if not self.opt.disable_automasking:

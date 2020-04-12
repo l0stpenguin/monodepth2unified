@@ -110,6 +110,9 @@ class MonodepthOptions:
                                  default=15)
 
         # ABLATION options
+        self.parser.add_argument("--occlusion_mask",
+                                 help="if set, uses occlusion mask",
+                                 action="store_true")
         self.parser.add_argument("--v1_multiscale",
                                  help="if set, uses monodepth v1 multiscale",
                                  action="store_true")
