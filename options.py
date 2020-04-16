@@ -168,12 +168,20 @@ class MonodepthOptions:
                                  type=int,
                                  help="number of batches between each tensorboard log",
                                  default=250)
+        self.parser.add_argument("--print_frequency",
+                                 type=int,
+                                 help="number of batches between each print log",
+                                 default=500)
         self.parser.add_argument("--save_frequency",
                                  type=int,
                                  help="number of epochs between each save",
                                  default=1)
 
         # EVALUATION options
+        self.parser.add_argument("--val_frequency",
+                                 type=int,
+                                 help="number of steps between each validation",
+                                 default=2000)
         self.parser.add_argument("--eval_stereo",
                                  help="if set evaluates in stereo mode",
                                  action="store_true")

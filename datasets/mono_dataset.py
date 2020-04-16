@@ -11,6 +11,8 @@ import random
 import numpy as np
 import copy
 from PIL import Image  # using pillow-simd for increased speed
+import imageio
+import cv2
 
 import torch
 import torch.utils.data as data
@@ -24,6 +26,9 @@ def pil_loader(path):
         with Image.open(f) as img:
             return img.convert('RGB')
 
+def img_loader(path):
+    img = imageio.imread(path).astype(np.float32)
+    return img
 
 class MonoDataset(data.Dataset):
     """Superclass for monocular dataloaders

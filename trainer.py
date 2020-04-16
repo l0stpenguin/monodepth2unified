@@ -16,15 +16,14 @@ from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
 
 import json
+from tqdm import tqdm
 
 from utils import *
 from kitti_utils import *
 from layers import *
 
 import datasets
-# import networks
 import models
-# from IPython import embed
 
 
 class Trainer:
@@ -40,6 +39,7 @@ class Trainer:
         self.parameters_to_train = []
 
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
+        self.use_multi_gpu = torch.cuda.device_count() > 1
 
         self.scales = range(self.opt.num_scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -69,6 +69,10 @@ class Trainer:
 
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
+
+        if self.use_multi_gpu:
+            self.models["depth"] = nn.DataParallel(self.models["depth"])
+            self.models["pose"] = nn.DataParallel(self.models["pose"])
 
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
@@ -107,7 +111,7 @@ class Trainer:
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
-        self.val_iter = iter(self.val_loader)
+        # self.val_iter = iter(self.val_loader)
 
         self.writers = {}
         for mode in ["train", "val"]:
@@ -180,17 +184,18 @@ class Trainer:
 
             duration = time.time() - before_op_time
 
-            if self.step % self.opt.log_frequency == 0:
-                self.log_time(batch_idx, duration, losses["loss"].cpu().data)
+            if self.step % self.opt.print_frequency == 0:
+                self.log_time(batch_idx, duration, losses)
 
+            if self.step % self.opt.log_frequency == 0:
                 if "depth_gt" in inputs:
                     self.compute_depth_losses(inputs, outputs, losses)
 
-                self.log("train", inputs, outputs, losses)
-                self.val()
+                self.log("train", inputs, outputs, losses, self.step)
 
             self.step += 1
-        
+
+        self.val()
         self.model_lr_scheduler.step()
 
     def process_batch(self, inputs):
@@ -246,22 +251,36 @@ class Trainer:
     def val(self):
         """Validate the model on a single minibatch
         """
+        def merge_dict(dict1, dict2):
+            for k, v in dict1.items():
+                if k in dict2.keys():
+                    dict2[k] += v
+                else:
+                    dict2[k] = v
+
         self.set_eval()
-        try:
-            inputs = self.val_iter.next()
-        except StopIteration:
-            self.val_iter = iter(self.val_loader)
-            inputs = self.val_iter.next()
+        val_losses = {}
+        # try:
+        #     inputs = self.val_iter.next()
+        # except StopIteration:
+        #     self.val_iter = iter(self.val_loader)
+        #     inputs = self.val_iter.next()
 
-        with torch.no_grad():
-            outputs, losses = self.process_batch(inputs)
+        for batch_idx, inputs in tqdm(enumerate(self.val_loader), 
+            desc='Val Epoch {}'.format(self.epoch), ncols=80, leave=True, total=len(self.val_loader)):
+            with torch.no_grad():
+                outputs, losses = self.process_batch(inputs)
+                if batch_idx == 0:
+                    val_inputs = inputs
+                    val_outputs = outputs
 
-            if "depth_gt" in inputs:
-                self.compute_depth_losses(inputs, outputs, losses)
+                if "depth_gt" in inputs:
+                    self.compute_depth_losses(inputs, outputs, losses)
 
-            self.log("val", inputs, outputs, losses)
-            del inputs, outputs, losses
-
+                merge_dict(losses, val_losses)
+                del inputs, outputs, losses
+        
+        self.log("val", val_inputs, val_outputs, val_losses, self.epoch)
         self.set_train()
 
     def generate_images_pred(self, inputs, outputs):
@@ -324,8 +343,9 @@ class Trainer:
 
                 outputs[("valid_mask", frame_id, scale)] = (pix_coords.abs().max(dim=-1)[0] <= 1).float()
                 if self.opt.occlusion_mask:
-                    outputs[("valid_mask", frame_id, scale)] = outputs[("valid_mask", frame_id, scale)] * (
-                        outputs[("computed_depth", frame_id, scale)] < outputs[("projected_depth", frame_id, scale)]).float()
+                    outputs[("valid_mask", frame_id, scale)] = outputs[("valid_mask", frame_id, scale)] * \
+                        (computed_depth > 0).float().squeeze(1) * \
+                        (outputs[("computed_depth", frame_id, scale)] <= outputs[("projected_depth", frame_id, scale)]).float().squeeze(1)
 
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
@@ -415,6 +435,7 @@ class Trainer:
             if combined.shape[1] == 1:
                 to_optimise = combined
             else:
+                # print(combined.size())
                 to_optimise, idxs = torch.min(combined, dim=1)
 
             if not self.opt.disable_automasking:
@@ -482,7 +503,7 @@ class Trainer:
         for i, metric in enumerate(self.depth_metric_names):
             losses[metric] = np.array(depth_errors[i].cpu())
 
-    def log_time(self, batch_idx, duration, loss):
+    def log_time(self, batch_idx, duration, losses):
         """Print a logging statement to the terminal
         """
         samples_per_sec = self.opt.batch_size / duration
@@ -490,45 +511,47 @@ class Trainer:
         training_time_left = (
             self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
         print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
-            " | loss: {:.5f} | time elapsed: {} | time left: {}"
-        print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
-                                  sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
+            " | loss: {:.4f}, p: {:.4f}, g: {:.4f}, s: {:.4f} | time elapsed: {} | time left: {}"
+        print(print_string.format(self.epoch, batch_idx, samples_per_sec, 
+            losses["loss"].cpu().data, losses["reprojection_loss"].cpu().data, losses["geometry_loss"].cpu().data,
+            losses["smooth_loss"].cpu().data, sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
 
-    def log(self, mode, inputs, outputs, losses):
+    def log(self, mode, inputs, outputs, losses, log_step):
         """Write an event to the tensorboard events file
         """
         writer = self.writers[mode]
         for l, v in losses.items():
-            writer.add_scalar("{}".format(l), v, self.step)
+            writer.add_scalar("{}_{}".format(mode, l), v, log_step)
 
         for j in range(min(2, self.opt.batch_size)):  # write a maxmimum of four images
             for s in self.scales:
                 for frame_id in self.opt.frame_ids:
                     writer.add_image(
-                        "color/f{}_s{}_b{}".format(frame_id, s, j),
-                        inputs[("color", frame_id, s)][j].data, self.step)
+                        "{}_color/f{}_s{}_b{}".format(mode, frame_id, s, j),
+                        inputs[("color", frame_id, s)][j].data, log_step)
                     if s == 0 and frame_id != 0:
                         writer.add_image(
-                            "color_pred/f{}_s{}_b{}".format(frame_id, s, j),
-                            outputs[("color", frame_id, s)][j].data, self.step)
+                            "{}_color_pred/f{}_s{}_b{}".format(mode, frame_id, s, j),
+                            outputs[("color", frame_id, s)][j].data, log_step)
 
                     writer.add_image(
-                        "disp/f{}_s{}_b{}".format(frame_id, s, j),
+                        "{}_disp/f{}_s{}_b{}".format(mode, frame_id, s, j),
                         tensor2array(outputs[("disp", frame_id, s)][j], max_value=None, colormap='magma'),
-                        self.step)
+                        log_step)
                     writer.add_image(
-                        "depth/f{}_s{}_b{}".format(frame_id, s, j),
+                        "{}_depth/f{}_s{}_b{}".format(mode, frame_id, s, j),
                         tensor2array(outputs[("depth", frame_id, s)][j], max_value=None),
-                        self.step)
-                    writer.add_image(
-                        "valid_mask/f{}_s{}_b{}".format(frame_id, s, j),
-                        tensor2array(outputs[("valid_mask", frame_id, s)][j], max_value=1, colormap='bone'),
-                        self.step)
+                        log_step)
+                    if frame_id != 0:
+                        writer.add_image(
+                            "{}_valid_mask/f{}_s{}_b{}".format(mode, frame_id, s, j),
+                            tensor2array(outputs[("valid_mask", frame_id, s)][j], max_value=1, colormap='bone'),
+                            log_step)
 
                 if not self.opt.disable_automasking:
                     writer.add_image(
-                        "automask/s{}_b{}".format(s, j),
-                        outputs[("auto_mask", s)][j][None, ...], self.step)
+                        "{}_auto_mask/s{}_b{}".format(mode, s, j),
+                        outputs[("auto_mask", s)][j][None, ...], log_step)
 
     def save_opts(self):
         """Save options to disk so we know what we ran this experiment with
@@ -550,7 +573,8 @@ class Trainer:
 
         for model_name, model in self.models.items():
             save_path = os.path.join(save_folder, "{}.pth".format(model_name))
-            to_save = model.state_dict()
+            model_save = model.module if self.use_multi_gpu else model
+            to_save = model_save.state_dict()
             # save the sizes - these are needed at prediction time
             to_save['height'] = self.opt.height
             to_save['width'] = self.opt.width
