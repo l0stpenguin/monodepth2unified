@@ -6,4 +6,3 @@ ckpt
 *_disp.npy
 *.npz
 kitti_data
-models
