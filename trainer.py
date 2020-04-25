@@ -335,11 +335,11 @@ class Trainer:
                 outputs[("color", frame_id, scale)] = F.grid_sample(
                     inputs[("color", frame_id, source_scale)],
                     outputs[("sample_coords", frame_id, scale)],
-                    padding_mode="border", align_corners=True)
+                    padding_mode="border")#, align_corners=True)
                 outputs[("projected_depth", frame_id, scale)] = F.grid_sample(
                     outputs[("depth", frame_id, source_scale)],
                     outputs[("sample_coords", frame_id, scale)],
-                    padding_mode="border", align_corners=True)
+                    padding_mode="border")#, align_corners=True)
 
                 outputs[("valid_mask", frame_id, scale)] = (pix_coords.abs().max(dim=-1)[0] <= 1).float()
                 if self.opt.occlusion_mask:
@@ -481,7 +481,7 @@ class Trainer:
         """
         depth_pred = outputs[("depth", 0, 0)]
         depth_pred = torch.clamp(F.interpolate(
-            depth_pred, [375, 1242], mode="bilinear", align_corners=False), 1e-3, 80)
+            depth_pred, [375, 1242], mode="bilinear", align_corners=False), 1e-3, 80) #
         depth_pred = depth_pred.detach()
 
         depth_gt = inputs["depth_gt"]

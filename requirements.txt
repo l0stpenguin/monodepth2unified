@@ -1,0 +1,15 @@
+pytorch=0.4.1
+torchvision=0.2.1
+tensorboardX==1.4
+opencv=3.3.1
+setproctitle
+scikit-image
+imageio
+matplotlib
+scipy
+argparse
+tensorboardX
+blessings
+progressbar2
+path.py
+evo
