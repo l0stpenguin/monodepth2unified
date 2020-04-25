@@ -65,6 +65,10 @@ class MonodepthOptions:
                                  type=float,
                                  help="geometry consistency weight",
                                  default=0)
+        self.parser.add_argument("--occlusion_penalty",
+                                 type=float,
+                                 help="occlusion penalty weight, which constraints that a pixel can be occluded at most one neighbor frame",
+                                 default=0.1)
         self.parser.add_argument("--num_scales",
                                  type=int,
                                  help="#scales used in the loss",
@@ -90,6 +94,14 @@ class MonodepthOptions:
                                  help="rotation mode",
                                  choices=["axis", "euler", "quat"],
                                  default="axis")
+        self.parser.add_argument("--occlusion_mode",
+                                 help="how to deal with occluded or disoccluded pixels",
+                                 choices=["implicit", "explicit", "both", "none"],
+                                 default="implicit")
+        self.parser.add_argument("--brightness",
+                                 type=float,
+                                 help="weight for balancing brightness/gradient constancy loss. 1: only brightness, 0: only gradient",
+                                 default=1)
 
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
@@ -110,9 +122,6 @@ class MonodepthOptions:
                                  default=15)
 
         # ABLATION options
-        self.parser.add_argument("--occlusion_mask",
-                                 help="if set, uses occlusion mask",
-                                 action="store_true")
         self.parser.add_argument("--v1_multiscale",
                                  help="if set, uses monodepth v1 multiscale",
                                  action="store_true")

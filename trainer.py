@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 from utils import *
 from kitti_utils import *
+from loss_utils import *
 from layers import *
 
 import datasets
@@ -46,6 +47,14 @@ class Trainer:
         self.num_pose_frames = 2 if self.opt.pose_model_input == "pairs" else self.num_input_frames
 
         assert self.opt.frame_ids[0] == 0, "frame_ids must start with 0"
+
+        if self.opt.occlusion_mode in ["implicit", "both"]:
+            self.opt.avg_reprojection = False
+            self.opt.occlusion_consistency = 0
+        elif self.opt.occlusion_mode in ["explicit", "none"]:
+            self.opt.avg_reprojection = True
+        else:
+            raise NotImplementedError
 
         self.use_pose_net = not (self.opt.use_stereo and self.opt.frame_ids == [0])
 
@@ -260,11 +269,6 @@ class Trainer:
 
         self.set_eval()
         val_losses = {}
-        # try:
-        #     inputs = self.val_iter.next()
-        # except StopIteration:
-        #     self.val_iter = iter(self.val_loader)
-        #     inputs = self.val_iter.next()
 
         for batch_idx, inputs in tqdm(enumerate(self.val_loader), 
             desc='Val Epoch {}'.format(self.epoch), ncols=80, leave=True, total=len(self.val_loader)):
@@ -336,37 +340,138 @@ class Trainer:
                     inputs[("color", frame_id, source_scale)],
                     outputs[("sample_coords", frame_id, scale)],
                     padding_mode="border")#, align_corners=True)
-                outputs[("projected_depth", frame_id, scale)] = F.grid_sample(
+                outputs[("sampled_depth", frame_id, scale)] = F.grid_sample(
                     outputs[("depth", frame_id, source_scale)],
                     outputs[("sample_coords", frame_id, scale)],
                     padding_mode="border")#, align_corners=True)
 
                 outputs[("valid_mask", frame_id, scale)] = (pix_coords.abs().max(dim=-1)[0] <= 1).float()
-                if self.opt.occlusion_mask:
-                    outputs[("valid_mask", frame_id, scale)] = outputs[("valid_mask", frame_id, scale)] * \
-                        (computed_depth > 0).float().squeeze(1) * \
-                        (outputs[("computed_depth", frame_id, scale)] <= outputs[("projected_depth", frame_id, scale)]).float().squeeze(1)
 
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
                         inputs[("color", frame_id, source_scale)]
 
-    def compute_reprojection_loss(self, pred, target):
+                if self.opt.occlusion_mode == "explicit":
+                    # TODO: add disoccluded mask
+                    outputs[("occluded", frame_id, scale)] = (
+                        outputs[("computed_depth", frame_id, scale)] > outputs[("sampled_depth", frame_id, scale)]).float()
+
+    def compute_pairwise_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
         """
-        abs_diff = torch.abs(target - pred)
-        l1_loss = abs_diff.mean(1, True)
+        # TODO: add gradient constancy loss
+        brightness_loss = compute_pairwise_brightness_loss(pred, target)
+        gradient_loss = compute_pairwise_gradient_loss(pred, target)
+        photometric_loss = self.opt.brightness * brightness_loss + \
+                           (1 - self.opt.brightness) * gradient_loss
 
         if self.opt.no_ssim:
-            reprojection_loss = l1_loss
+            reprojection_loss = photometric_loss
         else:
             ssim_loss = self.ssim(pred, target).mean(1, True)
-            reprojection_loss = 0.85 * ssim_loss + 0.15 * l1_loss
+            reprojection_loss = 0.85 * ssim_loss + 0.15 * photometric_loss
 
         return reprojection_loss
 
-    def compute_geometry_loss(self, computed_depth, projected_depth):
-        return (computed_depth - projected_depth).abs() / (computed_depth + projected_depth).abs()
+    def compute_1scale_reprojection_loss(self, inputs, outputs, scale):
+        reprojection_losses = []
+
+        if self.opt.v1_multiscale:
+            source_scale = scale
+        else:
+            source_scale = 0
+
+        target = inputs[("color", 0, source_scale)]
+        for frame_id in self.opt.frame_ids[1:]:
+            pred = outputs[("color", frame_id, scale)]
+            _reprojection_loss = self.compute_pairwise_reprojection_loss(pred, target)
+            _reprojection_loss = _reprojection_loss * outputs[("valid_mask", frame_id, scale)].unsqueeze(1)
+            if self.opt.occlusion_mode in ["explicit", "both"]:
+                _reprojection_loss = _reprojection_loss * (1 - outputs[("occluded", frame_id, scale)])
+            reprojection_losses.append(_reprojection_loss.clone())
+
+        reprojection_losses = torch.cat(reprojection_losses, 1)
+
+        if self.opt.avg_reprojection:
+            reprojection_loss = reprojection_losses.mean(1, keepdim=True)
+        else:
+            reprojection_loss = reprojection_losses
+
+        if not self.opt.disable_automasking:
+            identity_reprojection_losses = []
+            for frame_id in self.opt.frame_ids[1:]:
+                pred = inputs[("color", frame_id, source_scale)]
+                identity_reprojection_losses.append(
+                    self.compute_pairwise_reprojection_loss(pred, target) * \
+                        outputs[("valid_mask", frame_id, scale)].unsqueeze(1))
+            identity_reprojection_losses = torch.cat(identity_reprojection_losses, 1)
+            if self.opt.avg_reprojection:
+                identity_reprojection_loss = identity_reprojection_losses.mean(1, keepdim=True)
+            else:
+                # save both images, and do min all at once below
+                identity_reprojection_loss = identity_reprojection_losses
+            # add random numbers to break ties
+            identity_reprojection_loss += torch.randn(
+                identity_reprojection_loss.shape).cuda() * 0.00001
+
+            combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
+        else:
+            combined = reprojection_loss
+
+        if combined.shape[1] == 1:
+            to_optimise = combined
+        else:
+            to_optimise, idxs = torch.min(combined, dim=1)
+
+        if not self.opt.disable_automasking:
+            outputs[("auto_mask", scale)] = (
+                idxs > identity_reprojection_loss.shape[1] - 1).float()
+
+        return to_optimise.mean().clone()
+
+    def compute_1scale_geometry_loss(self, outputs, scale):
+        geometry_losses = []
+
+        for frame_id in self.opt.frame_ids[1:]:
+            computed_depth = outputs[("computed_depth", frame_id, scale)]
+            sampled_depth = outputs[("sampled_depth", frame_id, scale)]
+            _geometry_loss = compute_pairwise_geometry_loss(computed_depth, sampled_depth)
+            _geometry_loss = _geometry_loss * outputs[("valid_mask", frame_id, scale)].unsqueeze(1)
+            if self.opt.occlusion_mode in ["explicit", "both"]:
+                _geometry_loss = _geometry_loss * (1 - outputs[("occluded", frame_id, scale)])
+            geometry_losses.append(_geometry_loss.clone())
+
+        geometry_losses = torch.cat(geometry_losses, 1)
+        if self.opt.avg_reprojection:
+            to_optimise = geometry_losses.mean(1, keepdim=True)
+        else:
+            to_optimise, _ = torch.min(geometry_losses, dim=1, keepdim=True)
+
+        if not self.opt.disable_automasking:
+            to_optimise = to_optimise * outputs[("auto_mask", scale)].unsqueeze(1)
+
+        return to_optimise.mean().clone()
+
+
+    def compute_1scale_occlusion_penalty_loss(self, outputs, scale):
+        assert len(self.opt.frame_ids) == 3, "only support for 3 frames currently"
+        occlusion_mask_b = outputs[("occluded", -1, scale)] * outputs[("valid_mask", -1, scale)].unsqueeze(1)
+        occlusion_mask_f = outputs[("occluded",  1, scale)] * outputs[("valid_mask",  1, scale)].unsqueeze(1)
+        combined = occlusion_mask_b + occlusion_mask_f
+        return (combined >= 2).float().mean().clone()
+
+
+    def compute_1scale_smoothness_loss(self, inputs, outputs, scale):
+        smooth_loss = 0
+        for frame_id in self.opt.frame_ids:
+            disp = outputs[("disp", frame_id, scale)]
+            color = inputs[("color", frame_id, scale)]
+            mean_disp = disp.mean(2, True).mean(3, True)
+            norm_disp = disp / (mean_disp + 1e-7)
+            smooth_loss = smooth_loss + get_smooth_loss(norm_disp, color)
+
+        return smooth_loss.clone()
+
 
     def compute_losses(self, inputs, outputs):
         """Compute the reprojection and smoothness losses for a minibatch
@@ -376,91 +481,31 @@ class Trainer:
         total_reprojection_loss = 0
         total_geometry_loss = 0
         total_smooth_loss = 0
+        total_occlusion_loss = 0
 
         for scale in self.scales:
             loss = 0
-            reprojection_losses = []
-            geometry_losses = []
 
-            if self.opt.v1_multiscale:
-                source_scale = scale
-            else:
-                source_scale = 0
+            reprojection_loss = self.compute_1scale_reprojection_loss(inputs, outputs, scale)
+            loss = loss + reprojection_loss / (2 ** scale)
+            total_reprojection_loss += reprojection_loss / (2 ** scale)
 
-            target = inputs[("color", 0, source_scale)]
-            for frame_id in self.opt.frame_ids[1:]:
-                pred = outputs[("color", frame_id, scale)]
-                reprojection_losses.append(
-                    self.compute_reprojection_loss(pred, target) * outputs[("valid_mask", frame_id, scale)].unsqueeze(1))
+            if self.opt.geometry_consistency > 0:
+                geometry_loss = self.compute_1scale_geometry_loss(outputs, scale)
+                loss = loss + geometry_loss / (2 ** scale) * self.opt.geometry_consistency
+                total_geometry_loss += geometry_loss / (2 ** scale)
 
-                computed_depth = outputs[("computed_depth", frame_id, scale)]
-                projected_depth = outputs[("projected_depth", frame_id, scale)]
-                geometry_losses.append(
-                    self.compute_geometry_loss(computed_depth, projected_depth) * outputs[("valid_mask", frame_id, scale)].unsqueeze(1))
+            if self.opt.disparity_smoothness > 0:
+                smooth_loss = self.compute_1scale_smoothness_loss(inputs, outputs, scale)
+                loss = loss + smooth_loss / (2 ** scale) * self.opt.disparity_smoothness
+                total_smooth_loss += smooth_loss / (2 ** scale)
 
-            reprojection_losses = torch.cat(reprojection_losses, 1)
-            geometry_losses = torch.cat(geometry_losses, 1)
+            if self.opt.occlusion_penalty > 0:
+                occlusion_loss = self.compute_1scale_occlusion_penalty_loss(outputs, scale)
+                loss = loss + occlusion_loss / (2 ** scale) * self.opt.occlusion_penalty
+                total_occlusion_loss += occlusion_loss / (2 ** scale)
 
-            if not self.opt.disable_automasking:
-                identity_reprojection_losses = []
-                for frame_id in self.opt.frame_ids[1:]:
-                    pred = inputs[("color", frame_id, source_scale)]
-                    identity_reprojection_losses.append(
-                        self.compute_reprojection_loss(pred, target) * outputs[("valid_mask", frame_id, scale)].unsqueeze(1))
-
-                identity_reprojection_losses = torch.cat(identity_reprojection_losses, 1)
-
-                if self.opt.avg_reprojection:
-                    identity_reprojection_loss = identity_reprojection_losses.mean(1, keepdim=True)
-                else:
-                    # save both images, and do min all at once below
-                    identity_reprojection_loss = identity_reprojection_losses
-
-            if self.opt.avg_reprojection:
-                reprojection_loss = reprojection_losses.mean(1, keepdim=True)
-                geometry_loss = geometry_losses.mean(1, keepdim=True)
-            else:
-                reprojection_loss = reprojection_losses
-                geometry_loss, _ = torch.min(geometry_losses, dim=1, keepdim=True)
-
-            if not self.opt.disable_automasking:
-                # add random numbers to break ties
-                identity_reprojection_loss += torch.randn(
-                    identity_reprojection_loss.shape).cuda() * 0.00001
-
-                combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
-            else:
-                combined = reprojection_loss
-
-            if combined.shape[1] == 1:
-                to_optimise = combined
-            else:
-                # print(combined.size())
-                to_optimise, idxs = torch.min(combined, dim=1)
-
-            if not self.opt.disable_automasking:
-                outputs[("auto_mask", scale)] = (
-                    idxs > identity_reprojection_loss.shape[1] - 1).float()
-                geometry_loss = geometry_loss * outputs[("auto_mask", scale)].unsqueeze(1)
-
-            reprojection_loss_to_optimize = to_optimise.mean()
-            geometry_loss_to_optimize = geometry_loss.mean()
-
-            smooth_loss = 0
-            for frame_id in self.opt.frame_ids:
-                disp = outputs[("disp", frame_id, scale)]
-                color = inputs[("color", frame_id, scale)]
-                mean_disp = disp.mean(2, True).mean(3, True)
-                norm_disp = disp / (mean_disp + 1e-7)
-                smooth_loss += get_smooth_loss(norm_disp, color)
-
-            loss += reprojection_loss_to_optimize / (2 ** scale)
-            loss += self.opt.geometry_consistency * geometry_loss_to_optimize / (2 ** scale)
-            loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
-            total_loss += loss
-            total_reprojection_loss += reprojection_loss_to_optimize / (2 ** scale)
-            total_geometry_loss += geometry_loss_to_optimize / (2 ** scale)
-            total_smooth_loss += smooth_loss / (2 ** scale)
+            total_loss = total_loss + loss
             losses["loss/{}".format(scale)] = loss
 
         total_loss /= self.opt.num_scales
@@ -469,8 +514,12 @@ class Trainer:
         total_smooth_loss /= self.opt.num_scales
         losses["loss"] = total_loss
         losses["reprojection_loss"] = total_reprojection_loss
-        losses["geometry_loss"] = total_geometry_loss
-        losses["smooth_loss"] = total_smooth_loss
+        if self.opt.geometry_consistency > 0:
+            losses["geometry_loss"] = total_geometry_loss
+        if self.opt.disparity_smoothness > 0:
+            losses["smooth_loss"] = total_smooth_loss
+        if self.opt.occlusion_penalty > 0:
+            losses["occlusion_loss"] = total_occlusion_loss
         return losses
 
     def compute_depth_losses(self, inputs, outputs, losses):
@@ -510,11 +559,21 @@ class Trainer:
         time_sofar = time.time() - self.start_time
         training_time_left = (
             self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
-        print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
-            " | loss: {:.4f}, p: {:.4f}, g: {:.4f}, s: {:.4f} | time elapsed: {} | time left: {}"
+        loss_string = "loss: {:.4f}, p: {:.4f}"
+        loss_list = [losses["loss"].cpu().data, losses["reprojection_loss"].cpu().data]
+        if self.opt.geometry_consistency > 0:
+            loss_string += ", g: {:.4f}"
+            loss_list.append(losses["geometry_loss"].cpu().data)
+        if self.opt.disparity_smoothness > 0:
+            loss_string += ", s: {:.4f}"
+            loss_list.append(losses["smooth_loss"].cpu().data)
+        if self.opt.occlusion_penalty > 0:
+            loss_string += ", o: {:.4f}"
+            loss_list.append(losses["occlusion_loss"].cpu().data)
+
+        print_string = "epoch {:>3} | batch {:>6} | examples/s: {:3.1f} | " + loss_string + " | time elapsed: {} | time left: {}"
         print(print_string.format(self.epoch, batch_idx, samples_per_sec, 
-            losses["loss"].cpu().data, losses["reprojection_loss"].cpu().data, losses["geometry_loss"].cpu().data,
-            losses["smooth_loss"].cpu().data, sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
+            *loss_list, sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
 
     def log(self, mode, inputs, outputs, losses, log_step):
         """Write an event to the tensorboard events file
