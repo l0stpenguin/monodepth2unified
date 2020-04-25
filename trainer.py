@@ -50,7 +50,7 @@ class Trainer:
 
         if self.opt.occlusion_mode in ["implicit", "both"]:
             self.opt.avg_reprojection = False
-            self.opt.occlusion_consistency = 0
+            self.opt.occlusion_penalty = 0
         elif self.opt.occlusion_mode in ["explicit", "none"]:
             self.opt.avg_reprojection = True
         else:
@@ -360,8 +360,10 @@ class Trainer:
         """Computes reprojection loss between a batch of predicted and target images
         """
         # TODO: add gradient constancy loss
-        brightness_loss = compute_pairwise_brightness_loss(pred, target)
-        gradient_loss = compute_pairwise_gradient_loss(pred, target)
+        brightness_loss = compute_pairwise_brightness_loss(
+            pred, target, self.opt.use_robust_loss)
+        gradient_loss = compute_pairwise_gradient_loss(
+            pred, target, self.opt.use_robust_loss)
         photometric_loss = self.opt.brightness * brightness_loss + \
                            (1 - self.opt.brightness) * gradient_loss
 
@@ -436,7 +438,8 @@ class Trainer:
         for frame_id in self.opt.frame_ids[1:]:
             computed_depth = outputs[("computed_depth", frame_id, scale)]
             sampled_depth = outputs[("sampled_depth", frame_id, scale)]
-            _geometry_loss = compute_pairwise_geometry_loss(computed_depth, sampled_depth)
+            _geometry_loss = compute_pairwise_geometry_loss(
+                computed_depth, sampled_depth, self.opt.use_robust_loss)
             outputs[("scale_error", frame_id, scale)] = _geometry_loss.clone()
             _geometry_loss = _geometry_loss * outputs[("valid_mask", frame_id, scale)].unsqueeze(1)
             if self.opt.occlusion_mode in ["explicit", "both"]:
@@ -614,10 +617,11 @@ class Trainer:
                             "{}_color_error/f{}_s{}_b{}".format(mode, frame_id, s, j),
                             tensor2array(outputs[("color_error", frame_id, s)][j], max_value=None, colormap='bone'),
                             log_step)
-                        writer.add_image(
-                            "{}_scale_error/f{}_s{}_b{}".format(mode, frame_id, s, j),
-                            tensor2array(outputs[("scale_error", frame_id, s)][j], max_value=None, colormap='bone'),
-                            log_step)
+                        if self.opt.geometry_consistency > 0:
+                            writer.add_image(
+                                "{}_scale_error/f{}_s{}_b{}".format(mode, frame_id, s, j),
+                                tensor2array(outputs[("scale_error", frame_id, s)][j], max_value=None, colormap='bone'),
+                                log_step)
                         if self.opt.occlusion_mode in ["explicit", "both"]:
                             writer.add_image(
                                 "{}_occlusion_mask/f{}_s{}_b{}".format(mode, frame_id, s, j),

@@ -102,6 +102,9 @@ class MonodepthOptions:
                                  type=float,
                                  help="weight for balancing brightness/gradient constancy loss. 1: only brightness, 0: only gradient",
                                  default=1)
+        self.parser.add_argument("--use_robust_loss",
+                                 help="if set, uses Charbonnier penalty for l1 loss",
+                                 action="store_true")
 
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",

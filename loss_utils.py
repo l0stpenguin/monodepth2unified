@@ -38,21 +38,26 @@ def compute_depth_errors(gt, pred):
     return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3
 
 
-def compute_pairwise_brightness_loss(pred, target):
-    abs_diff = charbonnier_penalty(torch.abs(target - pred))
+def compute_pairwise_brightness_loss(pred, target, robustness=False):
+    abs_diff = torch.abs(target - pred)
+    if robustness:
+        abs_diff = charbonnier_penalty(abs_diff)
     l1_loss = abs_diff.mean(1, True)
     return l1_loss
 
 
-def compute_pairwise_gradient_loss(pred, target):
+def compute_pairwise_gradient_loss(pred, target, robustness=False):
     grad_pred_x = pred[:, :, :, :-1] - pred[:, :, :, 1:]
     grad_pred_y = pred[:, :, :-1, :] - pred[:, :, 1:, :]
 
     grad_tgt_x = target[:, :, :, :-1] - target[:, :, :, 1:]
     grad_tgt_y = target[:, :, :-1, :] - target[:, :, 1:, :]
 
-    x_diff = charbonnier_penalty(torch.abs(grad_pred_x - grad_tgt_x))
-    y_diff = charbonnier_penalty(torch.abs(grad_pred_y - grad_tgt_y))
+    x_diff = torch.abs(grad_pred_x - grad_tgt_x)
+    y_diff = torch.abs(grad_pred_y - grad_tgt_y)
+    if robustness:
+        x_diff = charbonnier_penalty(x_diff)
+        y_diff = charbonnier_penalty(y_diff)
 
     abs_diff = torch.cat((x_diff, x_diff[:, :, :, -1:]), 3) + \
                torch.cat((y_diff, y_diff[:, :, -1:, :]), 2)
@@ -60,8 +65,11 @@ def compute_pairwise_gradient_loss(pred, target):
     return l1_loss
 
 
-def compute_pairwise_geometry_loss(computed_depth, sampled_depth):
-    return charbonnier_penalty(torch.abs((computed_depth - sampled_depth)))
+def compute_pairwise_geometry_loss(computed_depth, sampled_depth, robustness=False):
+    abs_diff = torch.abs(computed_depth - sampled_depth)
+    if robustness:
+        abs_diff = charbonnier_penalty(abs_diff)
+    return abs_diff.mean(1, True)
 
 
 def charbonnier_penalty(loss):
