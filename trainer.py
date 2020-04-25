@@ -385,6 +385,7 @@ class Trainer:
         for frame_id in self.opt.frame_ids[1:]:
             pred = outputs[("color", frame_id, scale)]
             _reprojection_loss = self.compute_pairwise_reprojection_loss(pred, target)
+            outputs[("color_error", frame_id, scale)] = _reprojection_loss.clone()
             _reprojection_loss = _reprojection_loss * outputs[("valid_mask", frame_id, scale)].unsqueeze(1)
             if self.opt.occlusion_mode in ["explicit", "both"]:
                 _reprojection_loss = _reprojection_loss * (1 - outputs[("occluded", frame_id, scale)])
@@ -436,6 +437,7 @@ class Trainer:
             computed_depth = outputs[("computed_depth", frame_id, scale)]
             sampled_depth = outputs[("sampled_depth", frame_id, scale)]
             _geometry_loss = compute_pairwise_geometry_loss(computed_depth, sampled_depth)
+            outputs[("scale_error", frame_id, scale)] = _geometry_loss.clone()
             _geometry_loss = _geometry_loss * outputs[("valid_mask", frame_id, scale)].unsqueeze(1)
             if self.opt.occlusion_mode in ["explicit", "both"]:
                 _geometry_loss = _geometry_loss * (1 - outputs[("occluded", frame_id, scale)])
@@ -587,11 +589,13 @@ class Trainer:
                 for frame_id in self.opt.frame_ids:
                     writer.add_image(
                         "{}_color/f{}_s{}_b{}".format(mode, frame_id, s, j),
-                        inputs[("color", frame_id, s)][j].data, log_step)
+                        inputs[("color", frame_id, s)][j].data, 
+                        log_step)
                     if s == 0 and frame_id != 0:
                         writer.add_image(
                             "{}_color_pred/f{}_s{}_b{}".format(mode, frame_id, s, j),
-                            outputs[("color", frame_id, s)][j].data, log_step)
+                            outputs[("color", frame_id, s)][j].data, 
+                            log_step)
 
                     writer.add_image(
                         "{}_disp/f{}_s{}_b{}".format(mode, frame_id, s, j),
@@ -606,6 +610,19 @@ class Trainer:
                             "{}_valid_mask/f{}_s{}_b{}".format(mode, frame_id, s, j),
                             tensor2array(outputs[("valid_mask", frame_id, s)][j], max_value=1, colormap='bone'),
                             log_step)
+                        writer.add_image(
+                            "{}_color_error/f{}_s{}_b{}".format(mode, frame_id, s, j),
+                            tensor2array(outputs[("color_error", frame_id, s)][j], max_value=None, colormap='bone'),
+                            log_step)
+                        writer.add_image(
+                            "{}_scale_error/f{}_s{}_b{}".format(mode, frame_id, s, j),
+                            tensor2array(outputs[("scale_error", frame_id, s)][j], max_value=None, colormap='bone'),
+                            log_step)
+                        if self.opt.occlusion_mode in ["explicit", "both"]:
+                            writer.add_image(
+                                "{}_occlusion_mask/f{}_s{}_b{}".format(mode, frame_id, s, j),
+                                tensor2array(outputs[("occluded", frame_id, s)][j], max_value=1, colormap='bone'),
+                                log_step)
 
                 if not self.opt.disable_automasking:
                     writer.add_image(
