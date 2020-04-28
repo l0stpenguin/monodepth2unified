@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function
 import os
 import cv2
 import numpy as np
+from path import Path
 
 import torch
 from torch.utils.data import DataLoader
@@ -11,7 +12,10 @@ from layers import disp_to_depth
 from utils import readlines
 from options import MonodepthOptions
 import datasets
-import networks
+import models
+
+import json
+from tqdm import tqdm
 
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
 
@@ -68,6 +72,10 @@ def evaluate(opt):
     if opt.ext_disp_to_eval is None:
 
         opt.load_weights_folder = os.path.expanduser(opt.load_weights_folder)
+        result_dir = Path(opt.load_weights_folder)/"depth"
+        if not os.path.exists(result_dir):
+            os.makedirs(result_dir)
+        print("-> Results dir: {}".format(result_dir))
 
         assert os.path.isdir(opt.load_weights_folder), \
             "Cannot find a folder at {}".format(opt.load_weights_folder)
@@ -75,45 +83,43 @@ def evaluate(opt):
         print("-> Loading weights from {}".format(opt.load_weights_folder))
 
         filenames = readlines(os.path.join(splits_dir, opt.eval_split, "test_files.txt"))
-        encoder_path = os.path.join(opt.load_weights_folder, "encoder.pth")
-        decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
+        model_path = os.path.join(opt.load_weights_folder, "depth.pth")
 
-        encoder_dict = torch.load(encoder_path)
+        model_dict = torch.load(model_path)
 
         dataset = datasets.KITTIRAWDataset(opt.data_path, filenames,
-                                           encoder_dict['height'], encoder_dict['width'],
-                                           [0], 4, is_train=False)
+                                           model_dict['height'], model_dict['width'],
+                                           [0], 4, is_train=False, img_ext=".png" if opt.png else ".jpg")
         dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
-        encoder = networks.ResnetEncoder(opt.num_layers, False)
-        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc)
+        # encoder = networks.ResnetEncoder(opt.num_layers, False)
+        # depth_decoder = networks.DepthDecoder(encoder.num_ch_enc)
+        depth_model = models.DepthModel(
+            num_layers=opt.num_layers, 
+            num_scales=opt.num_scales,
+            pretrained=False)
 
-        model_dict = encoder.state_dict()
-        encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
-        depth_decoder.load_state_dict(torch.load(decoder_path))
+        depth_model.load_state_dict({k: v for k, v in model_dict.items() if k in depth_model.state_dict()})
 
-        encoder.cuda()
-        encoder.eval()
-        depth_decoder.cuda()
-        depth_decoder.eval()
+        depth_model = depth_model.cuda()
+        depth_model.eval()
 
         pred_disps = []
-
         print("-> Computing predictions with size {}x{}".format(
-            encoder_dict['width'], encoder_dict['height']))
+            model_dict['width'], model_dict['height']))
 
         with torch.no_grad():
-            for data in dataloader:
+            for data in tqdm(dataloader):
                 input_color = data[("color", 0, 0)].cuda()
 
                 if opt.post_process:
                     # Post-processed results require each image to have two forward passes
                     input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
 
-                output = depth_decoder(encoder(input_color))
+                output = depth_model(input_color)
 
-                pred_disp, _ = disp_to_depth(output[("disp", 0)], opt.min_depth, opt.max_depth)
+                pred_disp, _ = disp_to_depth(output[("disp", 0, 0)], opt.min_depth, opt.max_depth)
                 pred_disp = pred_disp.cpu()[:, 0].numpy()
 
                 if opt.post_process:
@@ -128,6 +134,8 @@ def evaluate(opt):
         # Load predictions from file
         print("-> Loading predictions from {}".format(opt.ext_disp_to_eval))
         pred_disps = np.load(opt.ext_disp_to_eval)
+        result_dir = Path(opt.ext_disp_to_eval).abspath().dirname()
+        print("-> Results dir: {}".format(result_dir))
 
         if opt.eval_eigen_to_benchmark:
             eigen_to_benchmark_ids = np.load(
@@ -137,7 +145,7 @@ def evaluate(opt):
 
     if opt.save_pred_disps:
         output_path = os.path.join(
-            opt.load_weights_folder, "disps_{}_split.npy".format(opt.eval_split))
+            result_dir, "disps_{}_split.npy".format(opt.eval_split))
         print("-> Saving predicted disparities to ", output_path)
         np.save(output_path, pred_disps)
 
@@ -146,7 +154,7 @@ def evaluate(opt):
         quit()
 
     elif opt.eval_split == 'benchmark':
-        save_dir = os.path.join(opt.load_weights_folder, "benchmark_predictions")
+        save_dir = os.path.join(result_dir, "benchmark_predictions")
         print("-> Saving out benchmark predictions to {}".format(save_dir))
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
@@ -163,7 +171,7 @@ def evaluate(opt):
         quit()
 
     gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
-    gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1')["data"]
+    gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1', allow_pickle=True)["data"]
 
     print("-> Evaluating")
 
@@ -178,7 +186,7 @@ def evaluate(opt):
     errors = []
     ratios = []
 
-    for i in range(pred_disps.shape[0]):
+    for i in tqdm(range(pred_disps.shape[0])):
 
         gt_depth = gt_depths[i]
         gt_height, gt_width = gt_depth.shape[:2]
@@ -213,18 +221,37 @@ def evaluate(opt):
 
         errors.append(compute_errors(gt_depth, pred_depth))
 
+    f = open(result_dir/"depth_error.log", "w")
     if not opt.disable_median_scaling:
         ratios = np.array(ratios)
         med = np.median(ratios)
-        print(" Scaling ratios | med: {:0.3f} | std: {:0.3f}".format(med, np.std(ratios / med)))
+        print_line = " Scaling ratios | med: {:0.3f} | std: {:0.3f}".format(med, np.std(ratios / med))
+        print(print_line)
+        f.writelines(print_line+"\n")
 
     mean_errors = np.array(errors).mean(0)
 
     print("\n  " + ("{:>8} | " * 7).format("abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3"))
     print(("&{: 8.3f}  " * 7).format(*mean_errors.tolist()) + "\\\\")
     print("\n-> Done!")
+    f.writelines("\n  " + ("{:>8} | " * 7 + "\n").format(
+        "abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3"))
+    f.writelines(("&{: 8.3f}  " * 7).format(*mean_errors.tolist()) + "\\\\")
+    f.writelines("\n-> Done!")
+    f.close()
 
 
 if __name__ == "__main__":
     options = MonodepthOptions()
-    evaluate(options.parse())
+    opt = options.parse()
+    if opt.ext_disp_to_eval is None:
+        saved_opt_path = Path(opt.load_weights_folder).abspath().dirname()/"opt.json"
+        saved_model_path = opt.load_weights_folder
+        with open(saved_opt_path, "r") as f:
+            opt.__dict__ = json.load(f).copy()
+        opt.eval_mono = True
+        opt.load_weights_folder = saved_model_path
+        opt.save_pred_disps = True
+    else:
+        opt.eval_mono = True
+    evaluate(opt)
