@@ -1,8 +1,8 @@
 __pycache__
 .vscode
-ckpt
+ckpt*
 *.pyc
 *_disp.jpg
 *_disp.npy
 *.npz
-kitti_data
+*_data
