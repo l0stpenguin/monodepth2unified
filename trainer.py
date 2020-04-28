@@ -61,6 +61,22 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
 
+        if len(self.opt.yoto_terms) > 0:
+            self.use_yoto = True
+            print("Train models in YOTO manner with loss terms: \n\t{}".format(self.opt.yoto_terms))
+        else:
+            self.use_yoto = False
+            print("Train models with fixed loss weights:")
+            print("\tsmoothness:     {:4.5f}".format(self.opt.disparity_smoothness))
+            print("\tgeometry:       {:4.5f}".format(self.opt.geometry_consistency))
+            print("\tocclusion_mode: {}".format(self.opt.occlusion_mode))
+            print("\tocclusion:      {:4.5f}".format(self.opt.occlusion_penalty))
+            print("\tauto_mask:      {}".format(not self.opt.disable_auto_masking))
+
+        print("Model type:")
+        print("\tDepth: {}".format(self.opt.depth_model_type))
+        print("\tPose:  {}".format(self.opt.pose_model_type))
+
         if self.opt.depth_model_type == "unet":
             self.models["depth"] = models.DepthModel(
                 num_layers=self.opt.num_layers, 
@@ -117,13 +133,13 @@ class Trainer:
 
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=True, img_ext=img_ext)
+            self.opt.frame_ids, 4, is_train=True, img_ext=img_ext, yoto_terms=self.opt.yoto_terms)
         self.train_loader = DataLoader(
             train_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext)
+            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext, yoto_terms=self.opt.yoto_terms)
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)

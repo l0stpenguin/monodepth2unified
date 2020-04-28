@@ -10,9 +10,12 @@ import numpy as np
 
 import torch
 import torch.nn as nn
-import torchvision.models as models
+# import torchvision.models as models
+from . import resnet_zoo as models
 import torch.utils.model_zoo as model_zoo
 
+from .film import MLP, FiLM
+from collections import OrderedDict
 
 class ResNetMultiImageInput(models.ResNet):
     """Constructs a resnet model with varying number of input images.
@@ -62,7 +65,7 @@ def resnet_multiimage_input(num_layers, pretrained=False, num_input_images=1):
 class ResnetEncoder(nn.Module):
     """Pytorch module for a resnet encoder
     """
-    def __init__(self, num_layers, pretrained, num_input_images=1):
+    def __init__(self, num_layers, pretrained, num_input_images=1, yoto_length=0):
         super(ResnetEncoder, self).__init__()
 
         self.num_ch_enc = np.array([64, 64, 128, 256, 512])
@@ -84,7 +87,7 @@ class ResnetEncoder(nn.Module):
         if num_layers > 34:
             self.num_ch_enc[1:] *= 4
 
-    def forward(self, input_image):
+    def forward(self, input_image, yoto_vector=None):
         self.features = []
         x = (input_image - 0.45) / 0.225
         x = self.encoder.conv1(x)

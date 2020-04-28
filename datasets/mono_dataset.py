@@ -26,9 +26,10 @@ def pil_loader(path):
         with Image.open(f) as img:
             return img.convert('RGB')
 
-def img_loader(path):
-    img = imageio.imread(path).astype(np.float32)
-    return img
+def log_uniform(p1, p2):
+    log_p1 = np.log10(p1)
+    log_p2 = np.log10(p2)
+    return 10**np.random.uniform(log_p1, log_p2)
 
 class MonoDataset(data.Dataset):
     """Superclass for monocular dataloaders
@@ -51,6 +52,7 @@ class MonoDataset(data.Dataset):
                  frame_idxs,
                  num_scales,
                  is_train=False,
+                 yoto_terms=[],
                  img_ext='.jpg'):
         super(MonoDataset, self).__init__()
 
@@ -65,6 +67,8 @@ class MonoDataset(data.Dataset):
 
         self.is_train = is_train
         self.img_ext = img_ext
+        self.use_yoto = False if len(yoto_terms) == 0 else True
+        self.yoto_terms = yoto_terms
 
         self.loader = pil_loader
         self.to_tensor = transforms.ToTensor()
@@ -201,6 +205,10 @@ class MonoDataset(data.Dataset):
             stereo_T[0, 3] = side_sign * baseline_sign * 0.1
 
             inputs["stereo_T"] = torch.from_numpy(stereo_T)
+
+        if self.use_yoto:
+            for term in self.yoto_terms:
+                inputs[("yoto", term)] = log_uniform(1, 1e-4)
 
         return inputs
 

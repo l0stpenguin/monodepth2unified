@@ -105,6 +105,11 @@ class MonodepthOptions:
         self.parser.add_argument("--use_robust_loss",
                                  help="if set, uses Charbonnier penalty for l1 loss",
                                  action="store_true")
+        self.parser.add_argument("--yoto_terms",
+                                 nargs="+",
+                                 type=str,
+                                 help="if not empty, trains models in YOTO scheme",
+                                 default=[])
 
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",

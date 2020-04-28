@@ -6,13 +6,14 @@ import torch.nn as nn
 from .net_utils import ResnetEncoder, DepthDecoder
 
 class DepthModel(nn.Module):
-    def __init__(self, num_layers=18, num_scales=4, pretrained=True):
+    def __init__(self, num_layers=18, num_scales=4, pretrained=True, yoto_length=0):
         super(DepthModel, self).__init__()
         self.num_scales = num_scales
         self.encoder = ResnetEncoder(
-            num_layers=num_layers, pretrained=pretrained)
+            num_layers=num_layers, pretrained=pretrained, yoto_length=yoto_length)
         self.decoder = DepthDecoder(
-            num_ch_enc=self.encoder.num_ch_enc, scales=range(self.num_scales))
+            num_ch_enc=self.encoder.num_ch_enc, scales=range(self.num_scales),
+            yoto_length=yoto_length)
 
     def forward(self, img, frame_id=0):
         features = self.encoder(img)
