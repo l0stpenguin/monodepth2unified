@@ -6,6 +6,7 @@
 
 from __future__ import absolute_import, division, print_function
 import os
+import torch
 import hashlib
 import zipfile
 from six.moves import urllib
@@ -14,6 +15,20 @@ import numpy as np
 from matplotlib import cm
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 
+
+def mask2image(mask):
+    if len(list(mask.size())) == 3:
+        mask = torch.nn.functional.softmax(mask, dim=0).detach().cpu().numpy()
+        mask_to_show = mask
+    else:
+        mask = mask.detach().cpu().numpy()
+        mask_to_show = np.zeros((3, *mask.shape))
+        # print(np.where(mask==1))
+        # print(np.where(mask==2))
+        # print(mask_to_show.shape)
+        mask_to_show[1][np.where(mask==1)] = 1
+        mask_to_show[2][np.where(mask==2)] = 1
+    return mask_to_show
 
 def high_res_colormap(low_res_cmap, resolution=1000, max_value=1):
     # Construct the list colormap, with interpolated values for higer resolution
