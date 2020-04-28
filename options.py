@@ -155,6 +155,11 @@ class MonodepthOptions:
                                  help="normal or shared",
                                  default="separate_resnet",
                                  choices=["posecnn", "separate_resnet", "shared"])
+        self.parser.add_argument("--depth_model_type",
+                                 type=str,
+                                 help="unet or dispnet",
+                                 default="unet",
+                                 choices=["unet", "dispnet"])
 
         # SYSTEM options
         self.parser.add_argument("--no_cuda",
@@ -173,7 +178,7 @@ class MonodepthOptions:
                                  nargs="+",
                                  type=str,
                                  help="models to load",
-                                 default=["encoder", "depth", "pose_encoder", "pose"])
+                                 default=["depth", "pose"])
 
         # LOGGING options
         self.parser.add_argument("--log_frequency",

@@ -61,10 +61,15 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
 
-        self.models["depth"] = models.DepthModel(
-            num_layers=self.opt.num_layers, 
-            num_scales=self.opt.num_scales,
-            pretrained=(self.opt.weights_init=="pretrained"))
+        if self.opt.depth_model_type == "unet":
+            self.models["depth"] = models.DepthModel(
+                num_layers=self.opt.num_layers, 
+                num_scales=self.opt.num_scales,
+                pretrained=(self.opt.weights_init=="pretrained"))
+        elif self.opt.depth_model_type == "dispnet":
+            self.models["depth"] = models.DispNet(num_scales=self.opt.num_scales)
+        else:
+            raise NotImplementedError
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 
@@ -87,6 +92,8 @@ class Trainer:
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
 
+        self.start_epoch = 0
+        self.start_step = 0
         if self.opt.load_weights_folder is not None:
             self.load_model()
 
@@ -103,7 +110,7 @@ class Trainer:
 
         train_filenames = readlines(fpath.format("train"))
         val_filenames = readlines(fpath.format("val"))
-        img_ext = '.png' if self.opt.png else '.jpg'
+        img_ext = ".png" if self.opt.png else ".jpg"
 
         num_train_samples = len(train_filenames)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
@@ -166,10 +173,10 @@ class Trainer:
     def train(self):
         """Run the entire training pipeline
         """
-        self.epoch = 0
-        self.step = 0
+        self.epoch = self.start_epoch
+        self.step = self.start_step
         self.start_time = time.time()
-        for self.epoch in range(self.opt.num_epochs):
+        for self.epoch in range(self.start_epoch, self.opt.num_epochs):
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
@@ -179,6 +186,7 @@ class Trainer:
         """
 
         print("Training")
+        print("-> current learning rate: {}".format(self.model_lr_scheduler.get_lr()))
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
@@ -258,7 +266,7 @@ class Trainer:
         return outputs
 
     def val(self):
-        """Validate the model on a single minibatch
+        """Validate the model
         """
         def merge_dict(dict1, dict2):
             for k, v in dict1.items():
@@ -303,7 +311,10 @@ class Trainer:
                         disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
                     source_scale = 0
 
-                _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
+                if self.opt.depth_model_type == "unet":
+                    _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
+                else:
+                    depth = 1/disp
 
                 outputs[("depth", frame_id, scale)] = depth
 
@@ -457,14 +468,12 @@ class Trainer:
 
         return to_optimise.mean().clone()
 
-
     def compute_1scale_occlusion_penalty_loss(self, outputs, scale):
         assert len(self.opt.frame_ids) == 3, "only support for 3 frames currently"
         occlusion_mask_b = outputs[("occluded", -1, scale)] * outputs[("valid_mask", -1, scale)].unsqueeze(1)
         occlusion_mask_f = outputs[("occluded",  1, scale)] * outputs[("valid_mask",  1, scale)].unsqueeze(1)
         combined = occlusion_mask_b + occlusion_mask_f
         return (combined >= 2).float().mean().clone()
-
 
     def compute_1scale_smoothness_loss(self, inputs, outputs, scale):
         smooth_loss = 0
@@ -476,7 +485,6 @@ class Trainer:
             smooth_loss = smooth_loss + get_smooth_loss(norm_disp, color)
 
         return smooth_loss.clone()
-
 
     def compute_losses(self, inputs, outputs):
         """Compute the reprojection and smoothness losses for a minibatch
@@ -563,7 +571,7 @@ class Trainer:
         samples_per_sec = self.opt.batch_size / duration
         time_sofar = time.time() - self.start_time
         training_time_left = (
-            self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
+            (self.num_total_steps - self.start_step) / self.step - 1.0) * time_sofar if self.step > 0 else 0
         loss_string = "loss: {:.4f}, p: {:.4f}"
         loss_list = [losses["loss"].cpu().data, losses["reprojection_loss"].cpu().data]
         if self.opt.geometry_consistency > 0:
@@ -662,7 +670,12 @@ class Trainer:
             torch.save(to_save, save_path)
 
         save_path = os.path.join(save_folder, "{}.pth".format("adam"))
-        torch.save(self.model_optimizer.state_dict(), save_path)
+        opt_dict = {
+            'adam': self.model_optimizer.state_dict(),
+            'epoch': self.epoch+1,
+            'step': self.step
+        }
+        torch.save(opt_dict, save_path)
 
     def load_model(self):
         """Load model(s) from disk
@@ -687,6 +700,8 @@ class Trainer:
         if os.path.isfile(optimizer_load_path):
             print("Loading Adam weights")
             optimizer_dict = torch.load(optimizer_load_path)
-            self.model_optimizer.load_state_dict(optimizer_dict)
+            self.model_optimizer.load_state_dict(optimizer_dict["adam"])
+            self.start_epoch = optimizer_dict["epoch"]
+            self.start_step = optimizer_dict["step"]
         else:
             print("Cannot find Adam weights so Adam is randomly initialized")

@@ -11,6 +11,7 @@ import os
 import argparse
 import numpy as np
 import PIL.Image as pil
+import tqdm
 
 from utils import readlines
 from kitti_utils import generate_depth_map
@@ -37,7 +38,7 @@ def export_gt_depths_kitti():
     print("Exporting ground truth depths for {}".format(opt.split))
 
     gt_depths = []
-    for line in lines:
+    for line in tqdm.tqdm(lines):
 
         folder, frame_id, _ = line.split()
         frame_id = int(frame_id)
