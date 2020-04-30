@@ -206,3 +206,107 @@
 
 -> Done!
 ----------------------------------------
+-> Results dir: ckpt/tiny_b0.85/models/weights_19/depth
+-> Loading weights from ckpt/tiny_b0.85/models/weights_19
+-> Computing predictions with size 640x192
+-> Saving predicted disparities to  ckpt/tiny_b0.85/models/weights_19/depth/disps_eigen_split.npy
+-> Evaluating
+   Mono evaluation - using median scaling
+ Scaling ratios | med: 40.048 | std: 0.101
+
+   abs_rel |   sq_rel |     rmse | rmse_log |       a1 |       a2 |       a3 | 
+&   0.132  &   1.048  &   5.050  &   0.204  &   0.852  &   0.951  &   0.979  \\
+
+-> Done!
+----------------------------------------
+-> Results dir: ckpt/tiny_b0.85/models/weights_49/depth
+-> Loading weights from ckpt/tiny_b0.85/models/weights_49
+-> Computing predictions with size 640x192
+-> Saving predicted disparities to  ckpt/tiny_b0.85/models/weights_49/depth/disps_eigen_split.npy
+-> Evaluating
+   Mono evaluation - using median scaling
+ Scaling ratios | med: 37.623 | std: 0.091
+
+   abs_rel |   sq_rel |     rmse | rmse_log |       a1 |       a2 |       a3 | 
+&   0.121  &   0.974  &   4.898  &   0.197  &   0.869  &   0.955  &   0.979  \\
+
+-> Done!
+----------------------------------------
+-> Results dir: ckpt/tiny_g0.001/models/weights_19/depth
+-> Loading weights from ckpt/tiny_g0.001/models/weights_19
+-> Computing predictions with size 640x192
+-> Saving predicted disparities to  ckpt/tiny_g0.001/models/weights_19/depth/disps_eigen_split.npy
+-> Evaluating
+   Mono evaluation - using median scaling
+ Scaling ratios | med: 38.454 | std: 0.089
+
+   abs_rel |   sq_rel |     rmse | rmse_log |       a1 |       a2 |       a3 | 
+&   0.129  &   0.952  &   5.055  &   0.207  &   0.847  &   0.951  &   0.979  \\
+
+-> Done!
+----------------------------------------
+-> Results dir: ckpt/tiny_g0.001/models/weights_49/depth
+-> Loading weights from ckpt/tiny_g0.001/models/weights_49
+-> Computing predictions with size 640x192
+-> Saving predicted disparities to  ckpt/tiny_g0.001/models/weights_49/depth/disps_eigen_split.npy
+-> Evaluating
+   Mono evaluation - using median scaling
+ Scaling ratios | med: 36.464 | std: 0.082
+
+   abs_rel |   sq_rel |     rmse | rmse_log |       a1 |       a2 |       a3 | 
+&   0.122  &   0.936  &   4.863  &   0.197  &   0.866  &   0.956  &   0.980  \\
+
+-> Done!
+----------------------------------------
+-> Results dir: ckpt/tiny_o0.001/models/weights_19/depth
+-> Loading weights from ckpt/tiny_o0.001/models/weights_19
+-> Computing predictions with size 640x192
+-> Saving predicted disparities to  ckpt/tiny_o0.001/models/weights_19/depth/disps_eigen_split.npy
+-> Evaluating
+   Mono evaluation - using median scaling
+ Scaling ratios | med: 37.590 | std: 0.085
+
+   abs_rel |   sq_rel |     rmse | rmse_log |       a1 |       a2 |       a3 | 
+&   0.129  &   0.955  &   5.154  &   0.206  &   0.842  &   0.950  &   0.980  \\
+
+-> Done!
+----------------------------------------
+-> Results dir: ckpt/tiny_o0.001/models/weights_49/depth
+-> Loading weights from ckpt/tiny_o0.001/models/weights_49
+-> Computing predictions with size 640x192
+-> Saving predicted disparities to  ckpt/tiny_o0.001/models/weights_49/depth/disps_eigen_split.npy
+-> Evaluating
+   Mono evaluation - using median scaling
+ Scaling ratios | med: 35.895 | std: 0.086
+
+   abs_rel |   sq_rel |     rmse | rmse_log |       a1 |       a2 |       a3 | 
+&   0.123  &   1.059  &   5.034  &   0.199  &   0.865  &   0.955  &   0.979  \\
+
+-> Done!
+----------------------------------------
+-> Results dir: ckpt/tiny_posecnn_g0.001/models/weights_19/depth
+-> Loading weights from ckpt/tiny_posecnn_g0.001/models/weights_19
+-> Computing predictions with size 640x192
+-> Saving predicted disparities to  ckpt/tiny_posecnn_g0.001/models/weights_19/depth/disps_eigen_split.npy
+-> Evaluating
+   Mono evaluation - using median scaling
+ Scaling ratios | med: 39.614 | std: 0.162
+
+   abs_rel |   sq_rel |     rmse | rmse_log |       a1 |       a2 |       a3 | 
+&   0.164  &   1.150  &   5.368  &   0.235  &   0.769  &   0.930  &   0.976  \\
+
+-> Done!
+----------------------------------------
+-> Results dir: ckpt/tiny_posecnn_g0.001/models/weights_49/depth
+-> Loading weights from ckpt/tiny_posecnn_g0.001/models/weights_49
+-> Computing predictions with size 640x192
+-> Saving predicted disparities to  ckpt/tiny_posecnn_g0.001/models/weights_49/depth/disps_eigen_split.npy
+-> Evaluating
+   Mono evaluation - using median scaling
+ Scaling ratios | med: 30.981 | std: 0.155
+
+   abs_rel |   sq_rel |     rmse | rmse_log |       a1 |       a2 |       a3 | 
+&   0.153  &   1.079  &   5.204  &   0.239  &   0.800  &   0.921  &   0.968  \\
+
+-> Done!
+----------------------------------------

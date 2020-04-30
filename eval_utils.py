@@ -8,13 +8,6 @@ import os, os.path
 import cv2
 import argparse
 
-parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument("--pred-pose", default=None, type=str)
-parser.add_argument("--gt-pose", default=None, type=str)
-parser.add_argument("--output-dir", type=str)
-parser.add_argument("--seq-id", type=str)
-
-
 class kittiEvalOdom():
     # ----------------------------------------------------------------------
     # poses: N,4,4
@@ -33,7 +26,7 @@ class kittiEvalOdom():
         # (1) idx pose(3x4 matrix in terms of 12 numbers)
         # (2) pose(3x4 matrix in terms of 12 numbers)
         # ----------------------------------------------------------------------
-        f = open(file_name, 'r')
+        f = open(file_name, "r")
         s = f.readlines()
         f.close()
         file_len = len(s)
@@ -124,7 +117,7 @@ class kittiEvalOdom():
         return err
         
     def saveSequenceErrors(self, err, file_name):
-        fp = open(file_name,'w')
+        fp = open(file_name,"w")
         for i in err:
             line_to_write = " ".join([str(j) for j in i])
             fp.writelines(line_to_write+"\n")
@@ -154,7 +147,7 @@ class kittiEvalOdom():
 
         fig = plt.figure()
         ax = plt.gca()
-        ax.set_aspect('equal')
+        ax.set_aspect("equal")
 
         for key in plot_keys:
             pos_xz = []
@@ -165,14 +158,14 @@ class kittiEvalOdom():
             pos_xz = np.asarray(pos_xz)
             plt.plot(pos_xz[:,0], pos_xz[:,1], label = key)	
             
-        plt.legend(loc = "upper right", prop={'size': fontsize_})
+        plt.legend(loc = "upper right", prop={"size": fontsize_})
         plt.xticks(fontsize = fontsize_) 
         plt.yticks(fontsize = fontsize_) 
-        plt.xlabel('x (m)',fontsize = fontsize_)
-        plt.ylabel('z (m)',fontsize = fontsize_)
+        plt.xlabel("x (m)",fontsize = fontsize_)
+        plt.ylabel("z (m)",fontsize = fontsize_)
         fig.set_size_inches(10, 10)
         png_title = "sequence_{:02}".format(seq)
-        plt.savefig(self.plot_path_dir +  "/" + png_title + ".pdf",bbox_inches='tight', pad_inches=0)
+        plt.savefig(self.plot_path_dir +  "/" + png_title + ".pdf",bbox_inches="tight", pad_inches=0)
         # plt.show()
 
     def plotError(self, avg_segment_errs):
@@ -219,7 +212,7 @@ class kittiEvalOdom():
 
     def eval(self, result_dir):
         seq_id = int(self.seq_id)
-        file_name = '{:02}.txt'.format(seq_id)
+        file_name = "{:02}.txt".format(seq_id)
 
         poses_result = self.loadPoses(self.pred_pose)
         poses_gt = self.loadPoses(self.gt_pose)
@@ -237,14 +230,10 @@ class kittiEvalOdom():
         print("Sequence: " + str(seq_id))
         print("Average translational RMSE (%): ", ave_t_err*100)
         print("Average rotational error (deg/100m): ", ave_r_err/np.pi * 180 *100)
-        with open(os.path.join(result_dir, 'pose_error.log'), 'w') as f:
+        with open(os.path.join(result_dir, "global_error.log"), "w") as f:
             f.writelines("Sequence: " + str(seq_id) + "\n")
             f.writelines("Average translational RMSE (%): " + str(ave_t_err * 100) + "\n")
             f.writelines("Average rotational error (deg/100m): " + str(ave_r_err/np.pi * 180 *100) + "\n")
-
-def compute_global_error(pred_pose, gt_pose, odom_result_dir, seq_id):
-    odom_eval = kittiEvalOdom(pred_pose, gt_pose, seq_id)
-    odom_eval.eval(odom_result_dir)
 
 # from https://github.com/tinghuiz/SfMLearner
 def dump_xyz(source_to_target_transformations):
@@ -270,36 +259,3 @@ def compute_ate(gtruth_xyz, pred_xyz_o):
     alignment_error = pred_xyz * scale - gtruth_xyz
     rmse = np.sqrt(np.sum(alignment_error ** 2)) / gtruth_xyz.shape[0]
     return rmse
-
-def compute_local_error(pred_poses, gt_pose, data_path, sequence_id, odom_result_dir):
-    gt_poses_path = os.path.join(data_path, "poses", "{:02d}.txt".format(sequence_id))
-    gt_global_poses = np.loadtxt(gt_poses_path).reshape(-1, 3, 4)
-    gt_global_poses = np.concatenate(
-        (gt_global_poses, np.zeros((gt_global_poses.shape[0], 1, 4))), 1)
-    gt_global_poses[:, 3, 3] = 1
-    gt_xyzs = gt_global_poses[:, :3, 3]
-
-    gt_local_poses = []
-    for i in range(1, len(gt_global_poses)):
-        gt_local_poses.append(
-            np.linalg.inv(np.dot(np.linalg.inv(gt_global_poses[i - 1]), gt_global_poses[i])))
-
-    ates = []
-    num_frames = gt_xyzs.shape[0]
-    track_length = 5
-    for i in range(0, num_frames - 1):
-        local_xyzs = np.array(dump_xyz(pred_poses[i:i + track_length - 1]))
-        gt_local_xyzs = np.array(dump_xyz(gt_local_poses[i:i + track_length - 1]))
-
-        ates.append(compute_ate(gt_local_xyzs, local_xyzs))
-
-    print("\n   Trajectory error: {:0.3f}, std: {:0.3f}\n".format(np.mean(ates), np.std(ates)))
-
-    save_path = os.path.join(odom_result_dir, "poses.npy")
-    np.save(save_path, pred_poses)
-    print("-> Predictions saved to", save_path)
-
-if __name__ == "__main__":
-    args = parser.parse_args()
-    compute_global_error(args.pred_pose, args.gt_pose, args.output_dir, args.seq_id)
-

@@ -64,6 +64,10 @@ class MotionOptions:
                                  type=int,
                                  help="frames to load",
                                  default=[0, -1, 1])
+        self.parser.add_argument("--prediction_level",
+                                 type=str,
+                                 choices=["object", "motion"],
+                                 default="motion")
 
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
@@ -81,7 +85,12 @@ class MotionOptions:
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",
-                                 default=5)
+                                 default=15)
+        self.parser.add_argument("--scheduler_type",
+                                 type=str,
+                                 help="type of scheduler",
+                                 choices=["cosine", "steplr"],
+                                 default="steplr")
 
         # ABLATION options
         self.parser.add_argument("--v1_multiscale",

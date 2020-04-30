@@ -4,7 +4,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID python motion_train.py \
 --log_dir ckpt_motion --split fusion_motion \
 --batch_size 4 \
 --num_epochs 30 \
---num_scales 1 \
+--num_scales 4 \
 --png --log_frequency 200 --print_frequency 200 \
---load_weights_folder ckpt_motion/motion_step5/models/weights_5 \
---model_name motion_step5
+--prediction_level object \
+--model_name motion_object_4scale

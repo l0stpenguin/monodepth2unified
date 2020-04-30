@@ -40,7 +40,10 @@ class MotionTrainer:
 
         assert self.opt.frame_ids[0] == 0, "frame_ids must start with 0"
 
+        self.num_class = 3 if self.opt.prediction_level == "motion" else 2
+
         self.models["mask"] = models.MaskModel(
+            num_class = self.num_class,
             num_layers=self.opt.num_layers,
             num_scales=self.opt.num_scales,
             pretrained=(self.opt.weights_init=="pretrained"))
@@ -51,8 +54,12 @@ class MotionTrainer:
             self.models["mask"] = nn.DataParallel(self.models["mask"])
         
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
-        self.model_lr_scheduler = optim.lr_scheduler.StepLR(
-            self.model_optimizer, self.opt.scheduler_step_size, 0.5)
+        if self.opt.scheduler_type == "steplr":
+            self.model_lr_scheduler = optim.lr_scheduler.StepLR(
+                self.model_optimizer, self.opt.scheduler_step_size, 0.1)
+        else:
+            self.model_lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                self.model_optimizer, self.opt.scheduler_step_size, 1e-5)
 
         self.start_epoch = 0
         self.start_step = 0
@@ -75,6 +82,7 @@ class MotionTrainer:
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
 
         train_dataset = self.dataset(
+            self.num_class,
             self.opt.data_path, train_filenames, 
             self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=True, img_ext=img_ext)
@@ -83,6 +91,7 @@ class MotionTrainer:
             num_workers=self.opt.num_workers, 
             pin_memory=True, drop_last=True)
         val_dataset = self.dataset(
+            self.num_class,
             self.opt.data_path, val_filenames, 
             self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=False, img_ext=img_ext)
@@ -251,14 +260,15 @@ class MotionTrainer:
     def compute_losses(self, inputs, outputs):
         losses = {}
         total_loss = 0
-        for frame_id in self.opt.frame_ids[1:]:
-            # print(type(outputs[("mask", frame_id, 0)]))
-            # print(type(inputs["mask_gt"]))
-            ce_loss = nn.functional.cross_entropy(
-                outputs[("mask", frame_id, 0)], inputs["mask_gt"])
-            total_loss += ce_loss.clone()
+        for s in self.scales:
+            for frame_id in self.opt.frame_ids[1:]:
+                scaled_pred_mask = nn.functional.interpolate(
+                    outputs[("mask", frame_id, s)], [self.opt.height, self.opt.width], mode="nearest")
+                ce_loss = nn.functional.cross_entropy(
+                    scaled_pred_mask, inputs["mask_gt"])
+                total_loss += ce_loss.clone()
         
-        total_loss /= (len(self.opt.frame_ids) - 1)
+        total_loss /= (len(self.opt.frame_ids) - 1) * self.opt.num_scales
         losses["loss"] = total_loss
         return losses
 
@@ -280,13 +290,18 @@ class MotionTrainer:
             to_save['use_stereo'] = self.opt.use_stereo
             torch.save(to_save, save_path)
 
-        save_path = os.path.join(save_folder, "{}.pth".format("adam"))
+        optim_save_path = os.path.join(save_folder, "{}.pth".format("adam"))
         opt_dict = {
             'adam': self.model_optimizer.state_dict(),
             'epoch': self.epoch+1,
             'step': self.step
         }
-        torch.save(opt_dict, save_path)
+        torch.save(opt_dict, optim_save_path)
+        scheduler_save_path = os.path.join(save_folder, "{}.pth".format("scheduler"))
+        scheduler_dict = {
+            'scheduler': self.model_lr_scheduler.state_dict()
+        }
+        torch.save(scheduler_dict, scheduler_save_path)
 
     def load_model(self):
         """Load model(s) from disk
@@ -314,5 +329,13 @@ class MotionTrainer:
             self.model_optimizer.load_state_dict(optimizer_dict["adam"])
             self.start_epoch = optimizer_dict["epoch"]
             self.start_step = optimizer_dict["step"]
+        else:
+            print("Cannot find Adam weights so Adam is randomly initialized")
+
+        scheduler_load_path = os.path.join(self.opt.load_weights_folder, "scheduler.pth")
+        if os.path.isfile(scheduler_load_path):
+            print("Loading Scheduler weights")
+            scheduler_dict = torch.load(scheduler_load_path)
+            self.model_lr_scheduler.load_state_dict(scheduler_dict["scheduler"])
         else:
             print("Cannot find Adam weights so Adam is randomly initialized")

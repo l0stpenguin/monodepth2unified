@@ -19,7 +19,7 @@ import random
 
 
 class MotionDataset(MonoDataset):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, num_class, *args, **kwargs):
         super(MotionDataset, self).__init__(*args, **kwargs)
 
         # self.K = np.array([[0.773, 0, 0.560, 0],
@@ -30,6 +30,7 @@ class MotionDataset(MonoDataset):
         #                    [0, 1.92, 0.5, 0],
         #                    [0, 0, 1, 0],
         #                    [0, 0, 0, 1]], dtype=np.float32)
+        self.num_class = num_class
         self.side_map = {"r": "right", "l": "left"}
 
     def check_depth(self):
@@ -73,9 +74,14 @@ class MotionDataset(MonoDataset):
         raw_mask = skimage.transform.resize(
             raw_mask, (self.height, self.width), order=0, preserve_range=True, mode='constant')
         mask_gt = np.zeros_like(raw_mask)
-        mask_gt[np.where(raw_mask==150)] = 1
-        mask_gt[np.where(raw_mask==151)] = 2
-        mask_gt[np.where(raw_mask==152)] = 2
+        if self.num_class == 3:
+            mask_gt[np.where(raw_mask==150)] = 1
+            mask_gt[np.where(raw_mask==151)] = 2
+            mask_gt[np.where(raw_mask==152)] = 2
+        else:
+            mask_gt[np.where(raw_mask==150)] = 1
+            mask_gt[np.where(raw_mask==151)] = 1
+            mask_gt[np.where(raw_mask==152)] = 1
 
         if do_flip:
             mask_gt = np.fliplr(mask_gt)
